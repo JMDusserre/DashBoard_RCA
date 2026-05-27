@@ -29,7 +29,7 @@ from .config import (
     DETAIL_COLUMNS,
     SHP_PATH,
 )
-from .data import get_csv_year_options, get_index_columns, get_prefecture_options, load_dashboard_data
+from .data import build_risk_ranking, get_csv_year_options, get_index_columns, get_prefecture_options, load_dashboard_data
 from .formatting import label_for_column, safe_float
 from .visuals import build_map, build_radar_chart
 
@@ -136,6 +136,24 @@ def main() -> None:
             help="Choose a scale that works for your device/audience.",
         )
 
+    # === SIDEBAR - RISK RANKING CONTROLS ===
+    with st.sidebar:
+        st.markdown("### Top-10 Risk Ranking")
+        ranking_level_label = st.selectbox(
+            "Rank by",
+            options=["Grid cells (5 km squares)", "Sub-prefectures"],
+            index=0,
+            help="Choose whether to rank individual cells or grouped sub-prefectures.",
+        )
+        top_n = st.number_input(
+            "How many results?",
+            min_value=3,
+            max_value=20,
+            value=10,
+            step=1,
+            help="Select how many of the most at-risk locations to show.",
+        )
+
     # === SIDEBAR - KPI CARDS CONFIGURATION ===
     with st.sidebar:
         st.markdown("### Quick Summary Cards")
@@ -186,19 +204,43 @@ def main() -> None:
             metric_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
             st.metric(label_for_column(metric_name), metric_text)
 
+    ranking_level = "subprefecture" if ranking_level_label == "Sub-prefectures" else "cell"
+    ranking_gdf = build_risk_ranking(filtered_gdf, selected_map_metric, level=ranking_level, top_n=int(top_n))
+
     # === ADVANCED GEOSPATIAL MAP ===
     st.markdown("### Advanced Geospatial Map")
     st.caption(
         "5×5 km grid cells colored by the selected normalized proxy. Light gray indicates missing data. "
-        "Hover over a cell to inspect its location and metrics."
+        "Red markers show the most at-risk locations for the selected factor."
     )
     choropleth_figure = build_map(
         filtered_gdf,
         selected_map_metric,
         selected_color_scale,
         hover_columns=selected_kpi_columns,
+        highlight_gdf=ranking_gdf,
     )
     st.plotly_chart(choropleth_figure, width="stretch")
+
+    st.markdown(f"### Top {int(top_n)} most at-risk locations")
+    st.caption(
+        f"Lower values mean higher risk. Ranking is based on {label_for_column(selected_map_metric)} and "
+        f"the current territory filter."
+    )
+    ranking_columns = [
+        column
+        for column in ["rank", "label", "value", "Prefecture", "Sous-prefecture", "id"]
+        if column in ranking_gdf.columns
+    ]
+    if not ranking_gdf.empty:
+        ranking_view = ranking_gdf[ranking_columns].copy()
+        ranking_view = ranking_view.rename(columns={"value": label_for_column(selected_map_metric)})
+        ranking_view[label_for_column(selected_map_metric)] = ranking_view[label_for_column(selected_map_metric)].map(
+            lambda value: f"{float(value):.2f}" if pd.notna(value) else "N/A"
+        )
+        st.dataframe(ranking_view, use_container_width=True, hide_index=True)
+    else:
+        st.info("No ranked locations were available for the selected factor.")
 
     st.markdown("### Year timeline")
     st.caption(

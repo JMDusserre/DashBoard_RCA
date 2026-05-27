@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import geopandas as gpd
 import pandas as pd
+import plotly.graph_objects as go
 import plotly.express as px
 from plotly.graph_objs import Figure
 
@@ -51,6 +52,7 @@ def build_map(
     color_column: str,
     color_scale: str,
     hover_columns: list[str] | None = None,
+    highlight_gdf: gpd.GeoDataFrame | None = None,
 ) -> Figure:
     """Create the choropleth map for the currently selected territory.
     
@@ -150,6 +152,35 @@ def build_map(
         hovertemplate="<b>%{hovertext}</b><br>" + "<br>".join(hover_lines[1:]) + "<extra></extra>",
     )
 
+    if highlight_gdf is not None and not highlight_gdf.empty and {"lat", "lon"}.issubset(highlight_gdf.columns):
+        highlight_text = []
+        for _, row in highlight_gdf.iterrows():
+            label = row.get("label", "")
+            value = row.get("value", pd.NA)
+            rank = row.get("rank", pd.NA)
+            value_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
+            highlight_text.append(
+                f"<b>#{rank}</b><br>{label}<br>{label_for_column(color_column)}: {value_text}"
+            )
+
+        fig.add_trace(
+            go.Scattermap(
+                lat=highlight_gdf["lat"],
+                lon=highlight_gdf["lon"],
+                mode="markers",
+                name="Top risk",
+                text=highlight_text,
+                hovertemplate="%{text}<extra></extra>",
+                marker=dict(
+                    size=16,
+                    color="#d7263d",
+                    opacity=0.9,
+                    symbol="circle",
+                    allowoverlap=True,
+                ),
+            )
+        )
+
     fig.update_layout(
         autosize=True,
         margin={"l": 0, "r": 0, "t": 0, "b": 56},
@@ -166,7 +197,11 @@ def build_map(
     )
 
     # Thin cell borders (0.2px) provide subtle grid structure without visual noise
-    fig.update_traces(marker_line_width=0.2, marker_line_color="#ffffff")
+    fig.update_traces(
+        marker_line_width=0.2,
+        marker_line_color="#ffffff",
+        selector=dict(type="choroplethmap"),
+    )
     
     # Lock viewport to CAR bounds to prevent zoom-out distraction
     fig.update_mapboxes(bounds=CAR_BOUNDS, center={"lat": 6.6, "lon": 20.9})

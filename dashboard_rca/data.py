@@ -17,7 +17,7 @@ from __future__ import annotations
 import geopandas as gpd
 import pandas as pd
 
-from .config import INDEX_PREFIX
+from .config import INDEX_PREFIX, FIELD_RISK_ORIENTATION
 
 
 RAW_PROXY_COLUMNS = [
@@ -234,3 +234,89 @@ def get_index_columns(gdf: gpd.GeoDataFrame) -> list[str]:
         for column in gdf.columns
         if column.startswith(INDEX_PREFIX) and column != "id"
     ]
+
+
+def build_risk_ranking(
+    gdf: gpd.GeoDataFrame,
+    metric_column: str,
+    level: str = "cell",
+    top_n: int = 10,
+) -> gpd.GeoDataFrame:
+    """Return the lowest-scoring locations for a selected metric.
+
+    Lower normalized values mean higher risk, so the returned rows are sorted
+    ascending on the selected metric.
+
+    Args:
+        gdf: Merged GeoDataFrame from load_dashboard_data().
+        metric_column: Normalized `Index_*` column to rank.
+        level: Either `cell` for 5 km squares or `subprefecture` for grouped areas.
+        top_n: Number of rows to return.
+
+    Returns:
+        GeoDataFrame with rank, label, metric value, and highlight point coordinates.
+    """
+    if metric_column not in gdf.columns:
+        return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
+
+    working = gdf.dropna(subset=[metric_column]).copy()
+
+    if working.empty:
+        return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
+
+    if level == "subprefecture":
+        group_columns = [column for column in ["Prefecture", "Sous-prefecture"] if column in working.columns]
+        if not group_columns:
+            return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
+
+        grouped_rows = []
+        for group_key, group in working.groupby(group_columns, dropna=False):
+            if len(group_columns) == 1:
+                prefecture = group_key if group_columns[0] == "Prefecture" else pd.NA
+                sous_prefecture = group_key if group_columns[0] == "Sous-prefecture" else pd.NA
+            else:
+                prefecture, sous_prefecture = group_key
+            geometry = group.geometry.unary_union
+            representative = geometry.representative_point() if geometry is not None else None
+            grouped_rows.append(
+                {
+                    "Prefecture": prefecture if "Prefecture" in group_columns else pd.NA,
+                    "Sous-prefecture": sous_prefecture if "Sous-prefecture" in group_columns else pd.NA,
+                    "value": group[metric_column].mean(skipna=True),
+                    "geometry": representative,
+                    "label": " | ".join([str(value) for value in [prefecture, sous_prefecture] if pd.notna(value)]),
+                }
+            )
+        result = gpd.GeoDataFrame(grouped_rows, geometry="geometry", crs=working.crs)
+    else:
+        result = working.copy()
+        result["label"] = result.apply(
+            lambda row: " | ".join(
+                [
+                    str(value)
+                    for value in [row.get("Prefecture", ""), row.get("Sous-prefecture", ""), row.get("id", "")]
+                    if pd.notna(value)
+                ]
+            ),
+            axis=1,
+        )
+
+    sort_column = metric_column if metric_column in result.columns else "value"
+    # Determine sort direction based on field risk semantics
+    # Default to ascending (lower values = more risk) if not in config
+    ascending = FIELD_RISK_ORIENTATION.get(metric_column, "ascending") == "ascending"
+    result = result.sort_values(sort_column, ascending=ascending).head(top_n).copy()
+    result = result.reset_index(drop=True)
+    result["rank"] = result.index + 1
+    if metric_column in result.columns:
+        result["value"] = result[metric_column]
+    else:
+        result["value"] = result["value"]
+    result["factor_label"] = metric_column
+
+    if "geometry" in result.columns:
+        representative = result.geometry.representative_point()
+        result["lon"] = representative.x
+        result["lat"] = representative.y
+
+    return result

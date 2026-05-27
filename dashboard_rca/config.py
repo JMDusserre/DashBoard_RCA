@@ -128,3 +128,32 @@ DETAIL_COLUMNS = [
     "Index_share_builtup",
     "Index_share_cropland",
 ]
+
+# FIELD_RISK_ORIENTATION defines the semantic direction of risk for each metric.
+# This ensures ranking highlights truly at-risk locations, not just extremes.
+# 
+# Risk semantic mapping (RCA conflict vulnerability context):
+#   - "descending" (high values = HIGH RISK): Economic activity, mines, development
+#     → High NTL, high population, high mining = more vulnerable to conflict
+#   - "ascending" (low values = HIGH RISK): Environmental integrity
+#     → Low vegetation, low forest = environmental stress = vulnerability
+FIELD_RISK_ORIENTATION = {
+    # Economic & demographic intensity (high = risky)
+    "Index_NTLsum": "descending",
+    "Index_NTLmean": "descending",
+    "Index_population": "descending",
+    "Index_BuiltUp": "descending",
+    "Index_Water": "descending",
+    # Mining activity (high = risky, conflict source)
+    "Index_Main_Mines": "descending",
+    "Index_Diamond_ArtisanalMines": "descending",
+    "Index_Boutiques": "descending",
+    # Land use / development (high = risky, competition/pressure)
+    "Index_share_builtup": "descending",
+    "Index_share_cropland": "descending",
+    "Index_share_deforest": "descending",
+    # Environmental integrity (low = risky, stress)
+    "Index_share_forest": "ascending",
+    "Index_share_NDVI": "ascending",
+    "Index_Grasslands": "ascending",
+}
