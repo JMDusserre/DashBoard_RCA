@@ -2,3 +2,12 @@ venv/
 __pycache__/
 .DS_Store
 .streamlit/
+
+# Python bytecode
+*.pyc
+
+# Data folder (raw/gis)
+data/
+
+# Jupyter
+.ipynb_checkpoints/

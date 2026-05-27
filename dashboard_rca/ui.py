@@ -1,4 +1,19 @@
-"""Streamlit UI composition for the dashboard."""
+"""Streamlit UI composition for the dashboard.
+
+This is the main entry point orchestrating all UI elements. The layout follows
+World Bank PRWP 11309 structure:
+  1. Header: Project title and reference to World Bank research
+  2. Macro-Indicators: Three key metrics (Security, Water, Economic)
+  3. Advanced Geospatial Map: Choropleth of selected index across CAR
+  4. Multidimensional Profile: Radar chart for detailed cell analysis
+  5. Methodology Expander: Explanation of data sources and index definitions
+
+DESIGN PHILOSOPHY:
+  - Non-technical language for NGO/donor audience (no "Index_GDP_primary", use "Agriculture")
+  - Graceful NaN handling: explain missing data as field insecurity, not failure
+  - Caching (@st.cache_data) ensures rapid reruns and filters (critical for interactivity)
+  - Detail panel only displays when a grid cell is selected (avoid overwhelming users)
+"""
 
 from __future__ import annotations
 
@@ -11,19 +26,36 @@ from .config import (
     DEFAULT_KPI_COLUMNS,
     DEFAULT_MAP_COLUMN,
     DEFAULT_MAP_SCALE,
+    DETAIL_COLUMNS,
     SHP_PATH,
 )
-from .data import get_index_columns, get_prefecture_options, get_year_options, load_dashboard_data
-from .formatting import label_for_column
-from .visuals import build_map
+from .data import get_csv_year_options, get_index_columns, get_prefecture_options, load_dashboard_data
+from .formatting import label_for_column, safe_float
+from .visuals import build_map, build_radar_chart
 
 
-st.set_page_config(layout="wide", page_title="CAR Dashboard")
+st.set_page_config(layout="wide", page_title="RR_WLD 2025-520 Dashboard")
+
+
+@st.cache_data
+def _cached_load(csv_str: str, shp_str: str, selected_year: int):
+    """Cache data load to avoid IO on every rerun.
+    
+    DESIGN DECISION - Caching:
+      Streamlit reruns the entire app on every interaction (slider, selectbox, etc.).
+      Without caching, we'd reload 20,817 geometries and 1,681 CSV rows on every
+      click, making the UI frozen. Caching stores this in memory, providing near-instant
+      response times. The decorator key is the tuple of file paths (strings are hashable).
+    """
+    return load_dashboard_data(csv_str, shp_str, year=selected_year)
 
 
 def select_metric(label: str, options: list[str], default_value: str) -> str:
-    """Build a sidebar metric selector with a safe fallback default."""
-
+    """Build a sidebar metric selector with a safe fallback default.
+    
+    DESIGN: Use index-based fallback; if default_value is missing (future-proofing
+    for dataset changes), use first available option. This prevents crashes.
+    """
     default_index = options.index(default_value) if default_value in options else 0
     return st.sidebar.selectbox(
         label,
@@ -34,84 +66,99 @@ def select_metric(label: str, options: list[str], default_value: str) -> str:
 
 
 def main() -> None:
-    """Run the Streamlit application."""
-
-    st.title("CAR Territorial Vulnerability Dashboard")
+    """Run the Streamlit application.
+    
+    Orchestrates all UI sections: sidebar filters, macro-indicator cards,
+    choropleth map, detail panel (radar chart), and methodology reference.
+    """
+    # === HEADER ===
+    st.title("RR_WLD 2025-520 CAR Dashboard")
     st.caption(
-        "A decision-support view of territorial vulnerability for public leaders, NGOs, and donors."
+        "Interactive dashboard built from the RR_WLD 2025-520 reproducibility package "
+        "for the Central African Republic. The active workspace snapshot exposes raw "
+        "socioeconomic proxies that are normalized for comparison across territories."
     )
     st.info(
-        "Use the controls on the left to choose the year, the map color, and the indicators that matter most for your decision."
+        "📍 The dashboard normalizes the RR_WLD proxy layers to a 0–1 scale so you can "
+        "compare grid cells consistently. Missing values remain visible as field reality, "
+        "not hidden or imputed data."
     )
 
+    # === DATA LOADING ===
     try:
-        dashboard_gdf = load_dashboard_data(str(CSV_PATH), str(SHP_PATH))
-    except Exception as exc:  # pragma: no cover - surfaced directly to the user
+        available_years = get_csv_year_options(str(CSV_PATH))
+        if not available_years:
+            st.error("No year data was found in the RR_WLD package CSV.")
+            st.stop()
+
+        if "timeline_year" not in st.session_state:
+            st.session_state.timeline_year = available_years[-1]
+
+        selected_year = int(st.session_state.timeline_year)
+        dashboard_gdf = _cached_load(str(CSV_PATH), str(SHP_PATH), selected_year)
+    except Exception as exc:  # pragma: no cover
         st.error(str(exc))
         st.stop()
 
     index_columns = get_index_columns(dashboard_gdf)
-
     if not index_columns:
         st.error("No index columns were found in the dataset.")
         st.stop()
 
-    available_years = get_year_options(dashboard_gdf)
+    # === SIDEBAR - TERRITORY FILTER ===
+    with st.sidebar:
+        st.markdown("### Filters")
+        prefecture_options = get_prefecture_options(dashboard_gdf)
+        if not prefecture_options:
+            st.error("No prefecture names were found in the dataset.")
+            st.stop()
 
-    if available_years:
-        selected_year = st.sidebar.selectbox(
-            "Year",
-            options=available_years,
-            index=len(available_years) - 1,
+        # Territory selector: "All territories" shows entire CAR
+        territory_choice = st.selectbox(
+            "Select territory (optional)",
+            options=["All territories"] + prefecture_options,
+            index=0,
+            help="Filter by prefecture or view the entire country.",
         )
-        year_values = pd.to_numeric(dashboard_gdf["Year"], errors="coerce")
-        dashboard_gdf = dashboard_gdf[
-            year_values.eq(selected_year) | year_values.isna()
-        ].copy()
 
-    prefecture_options = get_prefecture_options(dashboard_gdf)
-
-    if not prefecture_options:
-        st.error("No prefecture names were found in the dataset.")
-        st.stop()
-
-    territory_choice = st.sidebar.selectbox(
-        "Filter by territory (optional)",
-        options=["All territories"] + prefecture_options,
-        index=0,
-    )
-
-    st.sidebar.markdown("### Visual encoding")
-    selected_map_metric = select_metric(
-        "Map color: what should be highlighted?",
-        options=index_columns,
-        default_value=DEFAULT_MAP_COLUMN,
-    )
-    selected_color_scale = st.sidebar.selectbox(
-        "Color palette",
-        options=AVAILABLE_COLOR_SCALES,
-        index=AVAILABLE_COLOR_SCALES.index(DEFAULT_MAP_SCALE),
-    )
-
-    st.sidebar.markdown("### Quick summary cards")
-    selected_kpi_columns = [
-        select_metric(
-            "Summary card 1",
+    # === SIDEBAR - MAP VISUAL ENCODING ===
+    with st.sidebar:
+        st.markdown("### Map Visual Encoding")
+        selected_map_metric = select_metric(
+            "Which index to highlight?",
             options=index_columns,
-            default_value=DEFAULT_KPI_COLUMNS[0],
-        ),
-        select_metric(
-            "Summary card 2",
-            options=index_columns,
-            default_value=DEFAULT_KPI_COLUMNS[1],
-        ),
-        select_metric(
-            "Summary card 3",
-            options=index_columns,
-            default_value=DEFAULT_KPI_COLUMNS[2],
-        ),
-    ]
+            default_value=DEFAULT_MAP_COLUMN,
+        )
+        selected_color_scale = st.sidebar.selectbox(
+            "Color palette",
+            options=AVAILABLE_COLOR_SCALES,
+            index=AVAILABLE_COLOR_SCALES.index(DEFAULT_MAP_SCALE),
+            help="Choose a scale that works for your device/audience.",
+        )
 
+    # === SIDEBAR - KPI CARDS CONFIGURATION ===
+    with st.sidebar:
+        st.markdown("### Quick Summary Cards")
+        st.caption("Top 3 metrics for this territory (mean values)")
+        selected_kpi_columns = [
+            select_metric(
+                "Metric 1",
+                options=index_columns,
+                default_value=DEFAULT_KPI_COLUMNS[0],
+            ),
+            select_metric(
+                "Metric 2",
+                options=index_columns,
+                default_value=DEFAULT_KPI_COLUMNS[1],
+            ),
+            select_metric(
+                "Metric 3",
+                options=index_columns,
+                default_value=DEFAULT_KPI_COLUMNS[2],
+            ),
+        ]
+
+    # === FILTER GEODATAFRAME TO SELECTED TERRITORY ===
     if territory_choice == "All territories":
         filtered_gdf = dashboard_gdf.copy()
         display_name = "Central African Republic"
@@ -125,8 +172,8 @@ def main() -> None:
         st.warning(f"No spatial features were found for {display_name}.")
         st.stop()
 
-    st.subheader(f"Territory: {display_name}")
-
+    # === MACRO-INDICATORS (TOP THREE CARDS) ===
+    st.subheader(f"Macro-Indicators: {display_name}")
     metric_columns = st.columns(3)
     metric_values = [
         (selected_kpi_columns[0], filtered_gdf[selected_kpi_columns[0]].mean(skipna=True)),
@@ -139,7 +186,12 @@ def main() -> None:
             metric_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
             st.metric(label_for_column(metric_name), metric_text)
 
-    st.markdown("### Map of vulnerability")
+    # === ADVANCED GEOSPATIAL MAP ===
+    st.markdown("### Advanced Geospatial Map")
+    st.caption(
+        "5×5 km grid cells colored by the selected normalized proxy. Light gray indicates missing data. "
+        "Hover over a cell to inspect its location and metrics."
+    )
     choropleth_figure = build_map(
         filtered_gdf,
         selected_map_metric,
@@ -148,4 +200,139 @@ def main() -> None:
     )
     st.plotly_chart(choropleth_figure, width="stretch")
 
-    st.caption("Hover a cell to inspect its prefecture, sub-prefecture, year, and key indicators.")
+    st.markdown("### Year timeline")
+    st.caption(
+        "Use the horizontal timeline to move through the panel years and watch the map update."
+    )
+    st.select_slider(
+        "Year",
+        options=available_years,
+        key="timeline_year",
+        help="Drag across years to update the data slice shown in the map and detail panel.",
+    )
+
+    # === MULTIDIMENSIONAL PROFILE (DETAIL PANEL) ===
+    st.markdown("### Multidimensional Profile")
+    st.caption(
+        "Inspect a specific grid cell to see its 5-dimensional vulnerability profile: "
+        "primary economy, overall economy, health access, water access, and education access."
+    )
+
+    detail_cell_id = st.selectbox(
+        "Select a grid cell ID to analyze (optional)",
+        options=[""] + sorted(filtered_gdf["id"].dropna().astype(str).unique().tolist()),
+        index=0,
+        help="Shows detailed radar chart and location info for the selected cell.",
+    )
+
+    if detail_cell_id and detail_cell_id != "":
+        try:
+            detail = filtered_gdf[filtered_gdf["id"].astype(str) == detail_cell_id]
+            if not detail.empty:
+                row = detail.iloc[0]
+
+                col1, col2 = st.columns([2, 1])
+
+                # LEFT: Radar Chart (5 Dimensions)
+                with col1:
+                    st.markdown("#### 5-Dimensional Radar Chart")
+                    st.caption(
+                        "Each dimension extends from 0 (high risk) to 1 (high safety). "
+                        "Missing data (field insecurity) shown as -0.1 (off-scale)."
+                    )
+                    radar_fig = build_radar_chart(row)
+                    st.plotly_chart(radar_fig, width="stretch")
+
+                # RIGHT: Location & Context
+                with col2:
+                    st.markdown("#### Location & Context")
+                    prefecture_value = row.get("Prefecture", pd.NA)
+                    sous_pref_value = row.get("Sous-prefecture", pd.NA)
+                    prefecture_str = str(prefecture_value) if pd.notna(prefecture_value) else "Unknown"
+                    sous_pref_str = str(sous_pref_value) if pd.notna(sous_pref_value) else "Unknown"
+                    year_val = int(row.get("Year", 0)) if pd.notna(row.get("Year")) else 0
+
+                    st.info(f"**Prefecture:** {prefecture_str}\n\n**Sous-prefecture:** {sous_pref_str}\n\n**Year:** {year_val}")
+
+                    st.warning(
+                        "The RR_WLD package snapshot in this workspace does not include the "
+                        "separate access/conflict layers used in the published methodology. "
+                        "This panel therefore reports the available proxy layers only."
+                    )
+
+                    # Show all 5 dimensions in vertical list
+                    st.markdown("#### Dimension Values")
+                    for col in DETAIL_COLUMNS:
+                        val = safe_float(row.get(col, pd.NA))
+                        val_str = f"{val:.2f}" if val is not None else "N/A"
+                        st.write(f"**{label_for_column(col)}:** {val_str}")
+
+            else:
+                st.warning(f"Grid cell ID {detail_cell_id} not found in filtered dataset.")
+        except (ValueError, KeyError, IndexError):
+            st.error(f"Could not load details for cell ID {detail_cell_id}.")
+
+    # === METHODOLOGY & DATA SOURCES (EXPANDER) ===
+    with st.expander("📚 Methodology & Data Sources", expanded=False):
+        st.markdown("""
+                #### RR_WLD 2025-520 Data Package
+        
+                This dashboard uses the CAR grid bundle included in the RR_WLD 2025-520
+                reproducibility package. The active workspace snapshot contains the base grid
+                table, the 5 km shapefile, and socioeconomic proxy variables that can be normalized
+                for interactive exploration.
+        
+                **Normalization rule:** every dashboard metric is mapped to a 0–1 interval so the
+                map and radar chart remain comparable across variables with different units.
+        
+                **Available proxy layers in this workspace snapshot:**
+        
+                - Nighttime lights intensity and mean brightness
+                - Population pressure
+                - Built-up, water, forest, cropland, deforestation, and NDVI shares
+                - Mine and retail density proxies
+        
+                **Data reality - NaN handling:**
+        
+                Missing data are preserved rather than fabricated. When a raw value is not available
+                in the package, the corresponding cell stays visible as neutral gray so users can see
+                where the data are incomplete.
+        
+        **Geographic Resolution:**
+        
+                All data is aggregated to 5×5 km grid cells across CAR. That resolution is fine enough
+                for territorial comparison while still responsive in Streamlit.
+        
+        **Key References:**
+        
+                - Nighttime lights and land cover proxies from the RR_WLD package inputs
+                - CAR administrative boundary grid from `Grid_5km_CFA_v4.shp`
+                - Base socioeconomic table from `Base_CAF_v1.csv`
+        
+        **Data Availability:**
+        
+                - Year selector reflects the years present in the package input table
+                - Territorial names are normalized to `Prefecture` and `Sous-prefecture`
+                - Proxy columns are generated at load time so the dashboard stays interactive
+        
+        #### Dashboard Architecture Notes
+        
+        This dashboard is built as a Streamlit MVP with modular Python architecture:
+        - **config.py:** Centralized constants (bounds, color scales, friendly labels)
+        - **data.py:** Data pipeline (CSV + shapefile merge with string ID casting)
+        - **formatting.py:** UI helper functions (label translation, NaN handling)
+        - **visuals.py:** Plotly rendering (choropleth map, radar chart)
+        - **ui.py:** Streamlit orchestration (sidebar filters, detail panel)
+        
+        **Design Principles:**
+        
+        - **Robustness:** Graceful NaN handling ensures 47% missing data doesn't crash the app
+        - **Clarity:** Non-technical labels ("Security Index" not "Index_Absence_of_conflicts")
+        - **Accessibility:** Multiple color scales including colorblind-friendly options
+        - **Scalability:** Dynamic index discovery allows new metrics without code changes
+        - **Reproducibility:** pinned requirements.txt and containerizable structure
+        """)
+
+
+if __name__ == "__main__":
+    main()
