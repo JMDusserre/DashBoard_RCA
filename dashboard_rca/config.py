@@ -93,67 +93,103 @@ CAR_BOUNDS = {
     "north": 11.5,
 }
 
-# FRIENDLY_LABELS map technical column names to non-technical language for decision-makers.
+# FRIENDLY_LABELS map technical column names to non-technical proxy language for decision-makers.
 # This ensures NGO staff, government leaders, and donors understand indicators
 # without needing data science expertise.
-# World Bank PRWP 11309 multidimensional framework:
-#   - 3 macro-indicators: Conflicts, Water, Economic activity (top cards)
-#   - 5 dimensions in detail panel: Primary GDP, Overall GDP, Health, Water, Education
+# The active workspace uses proxy layers only; labels should not imply archived
+# official vulnerability components are available here.
 FRIENDLY_LABELS = {
     "Prefecture": "Prefecture",
     "Sous-prefecture": "Sub-prefecture",
-    "Index_NTLsum": "Nighttime lights intensity",
-    "Index_NTLmean": "Average nighttime lights",
-    "Index_population": "Population pressure",
-    "Index_BuiltUp": "Built-up intensity",
-    "Index_Water": "Water coverage",
-    "Index_Grasslands": "Grassland coverage",
-    "Index_Deforest": "Deforestation pressure",
+    "Index_NTLsum": "Nighttime lights proxy",
+    "Index_NTLmean": "Average nighttime lights proxy",
+    "Index_population": "Population pressure proxy",
+    "Index_BuiltUp": "Built-up proxy",
+    "Index_Water": "Water access proxy",
+    "Index_Grasslands": "Grassland coverage proxy",
+    "Index_Deforest": "Deforestation pressure proxy",
     "Index_share_forest": "Forest share",
     "Index_share_cropland": "Cropland share",
     "Index_share_builtup": "Built-up share",
     "Index_share_deforest": "Deforestation share",
     "Index_share_NDVI": "Vegetation share",
-    "Index_Main_Mines": "Main mines intensity",
-    "Index_Diamond_ArtisanalMines": "Artisanal diamond mines",
-    "Index_Boutiques": "Market and retail density",
+    "Index_Main_Mines": "Main mines proxy",
+    "Index_Diamond_ArtisanalMines": "Artisanal diamond mines proxy",
+    "Index_Boutiques": "Market and retail density proxy",
+    "Index_Vulnerab_Final": "Overall vulnerability proxy",
 }
 
 # Detail panel uses the five most interpretable normalized proxies available in
-# the RR_WLD package snapshot.
+# the active RR_WLD package snapshot, plus the overall vulnerability composite.
 DETAIL_COLUMNS = [
+    "Index_Vulnerab_Final",
     "Index_NTLsum",
     "Index_NTLmean",
     "Index_population",
     "Index_share_builtup",
-    "Index_share_cropland",
 ]
 
-# FIELD_RISK_ORIENTATION defines the semantic direction of risk for each metric.
-# This ensures ranking highlights truly at-risk locations, not just extremes.
-# 
-# Risk semantic mapping (RCA conflict vulnerability context):
-#   - "descending" (high values = HIGH RISK): Economic activity, mines, development
-#     → High NTL, high population, high mining = more vulnerable to conflict
-#   - "ascending" (low values = HIGH RISK): Environmental integrity
-#     → Low vegetation, low forest = environmental stress = vulnerability
-FIELD_RISK_ORIENTATION = {
-    # Economic & demographic intensity (high = risky)
-    "Index_NTLsum": "descending",
-    "Index_NTLmean": "descending",
-    "Index_population": "descending",
-    "Index_BuiltUp": "descending",
-    "Index_Water": "descending",
-    # Mining activity (high = risky, conflict source)
-    "Index_Main_Mines": "descending",
-    "Index_Diamond_ArtisanalMines": "descending",
-    "Index_Boutiques": "descending",
-    # Land use / development (high = risky, competition/pressure)
-    "Index_share_builtup": "descending",
-    "Index_share_cropland": "descending",
-    "Index_share_deforest": "descending",
-    # Environmental integrity (low = risky, stress)
-    "Index_share_forest": "ascending",
-    "Index_share_NDVI": "ascending",
-    "Index_Grasslands": "ascending",
+
+# Metric categorization for neutral UX treatment.
+# Descriptive metrics are purely informational (no ranking, no progress bars).
+# Capacity metrics show access/availability (can have progress bars).
+# Risk metrics show vulnerability/pressure (can be ranked and have progress bars).
+DESCRIPTIVE_METRICS = [
+    "Index_NTLsum",
+    "Index_NTLmean",
+    "Index_BuiltUp",
+    "Index_Grasslands",
+    "Index_share_forest",
+    "Index_share_cropland",
+    "Index_share_builtup",
+    "Index_share_deforest",
+    "Index_share_NDVI",
+    "Index_Main_Mines",
+    "Index_Diamond_ArtisanalMines",
+    "Index_Boutiques",
+]
+
+CAPACITY_METRICS = [
+    "Index_Water",
+]
+
+RISK_METRICS = [
+    "Index_population",
+    "Index_Deforest",
+    "Index_Vulnerab_Final",
+]
+
+# Persona options for role-based UI
+PERSONA_OPTIONS = [
+    "Strategic (Donors/PTF)",
+    "Operational (NGOs/UN)",
+]
+
+# Spatial resolution options for dynamic aggregation
+SPATIAL_RESOLUTIONS = [
+    "Grid cell (5×5 km)",
+    "City (Admin 3)",
+    "Sous-prefecture (Admin 2)",
+    "Prefecture (Admin 1)",
+]
+
+# Persona KPI definitions use only the active proxy bundle.
+# Each entry is (display label, list of candidate columns to average).
+PERSONA_KPI_DEFINITIONS = {
+    "Strategic (Donors/PTF)": [
+        ("Total Economic Activity Proxy", ["Index_NTLsum"]),
+        (
+            "Aggregated Infrastructure Access Proxy",
+            ["Index_Water", "Index_share_builtup", "Index_share_cropland"],
+        ),
+        (
+            "Aggregated Risk Exposure Proxy",
+            ["Index_population", "Index_Deforest", "Index_Main_Mines"],
+        ),
+    ],
+    "Operational (NGOs/UN)": [
+        ("Water Access Proxy", ["Index_Water"]),
+        ("Settlement Access Proxy", ["Index_share_builtup"]),
+        ("Agricultural Access Proxy", ["Index_share_cropland"]),
+    ],
 }

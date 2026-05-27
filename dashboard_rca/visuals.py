@@ -25,9 +25,9 @@ DESIGN DECISIONS EXPLAINED:
      Allows subtle visibility of labeled basemap (city names, roads) while
      keeping colored cells readable. Full opacity (1.0) hides context.
   
-  5. Thin Cell Borders (0.2px):
-     Default Plotly borders are thick and obstructive. 0.2px white borders
-     provide subtle grid structure without visual noise.
+  5. Cell Borders Disabled:
+      The grid is already visible from the polygon geometry, so the choropleth
+      stroke is kept transparent to avoid white seams between adjacent cells.
 
 World Bank PRWP 11309 Alignment:
   - Choropleth encodes single index (Security, Water, GDP) for focus
@@ -140,7 +140,7 @@ def build_map(
         hover_name="Prefecture" if "Prefecture" in plot_gdf.columns else None,
         hover_data={column: False for column in customdata_columns},
         range_color=(-0.01, 1),
-        opacity=0.65,  # Opacity allows subtle basemap context
+        opacity=0.78,  # Slightly higher opacity reduces visible seams between cells
         zoom=5.2,      # Zoom shows full CAR at startup
         center={"lat": 6.6, "lon": 20.9},  # Hardcoded to avoid CRS warnings
         map_style="carto-positron",  # Labeled basemap provides context
@@ -196,12 +196,26 @@ def build_map(
         ),
     )
 
-    # Thin cell borders (0.2px) provide subtle grid structure without visual noise
-    fig.update_traces(
-        marker_line_width=0.2,
-        marker_line_color="#ffffff",
-        selector=dict(type="choroplethmap"),
+    # Add a simple north-arrow annotation for cartographic convention
+    fig.update_layout(
+        annotations=[
+            dict(
+                text="⬆ N",
+                x=0.97,
+                y=0.97,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=14),
+            )
+        ]
     )
+
+    # Disable cell borders so adjacent polygons don't show white seams.
+    for trace in fig.data:
+        if getattr(trace, "type", "") in {"choroplethmap", "choroplethmapbox"} and hasattr(trace, "marker"):
+            trace.marker.line.width = 0
+            trace.marker.line.color = "rgba(0,0,0,0)"
     
     # Lock viewport to CAR bounds to prevent zoom-out distraction
     fig.update_mapboxes(bounds=CAR_BOUNDS, center={"lat": 6.6, "lon": 20.9})
@@ -276,7 +290,7 @@ def build_radar_chart(
                 tickfont=dict(size=11),
             ),
         ),
-        height=500,
+        height=450,
         margin=dict(l=80, r=80, t=80, b=80),
         font=dict(size=11),
     )

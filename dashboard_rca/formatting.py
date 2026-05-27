@@ -14,7 +14,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from .config import FRIENDLY_LABELS
+from .config import FRIENDLY_LABELS, DESCRIPTIVE_METRICS
 
 
 def label_for_column(column_name: str) -> str:
@@ -74,16 +74,19 @@ def safe_float(value: object) -> float | None:
         return None
 
 
-def render_progress_indicator(label: str, value: object) -> None:
+def render_progress_indicator(label: str, value: object, column_name: str = "") -> None:
     """Render a normalized progress bar or a clear warning when data is missing.
     
-    DESIGN: Always explains missing data explicitly ("not available for this grid cell")
-    rather than showing blank space or zeros. This maintains trust with decision-makers
-    who need to understand which areas have verified data vs. insecure/unreachable.
+    DESIGN: Descriptive metrics (purely informational) are displayed as plain values
+    without progress bars, which would incorrectly imply a goal or normative scale.
+    Risk and capacity metrics use progress bars to show their 0-1 normalized scale.
+    Always explains missing data explicitly ("not available for this grid cell")
+    rather than showing blank space or zeros.
     
     Args:
         label: Metric name (e.g., "Security Index")
         value: Numeric value (0–1) or NaN/None
+        column_name: Technical column name to check against DESCRIPTIVE_METRICS
     """
     numeric_value = safe_float(value)
 
@@ -93,4 +96,7 @@ def render_progress_indicator(label: str, value: object) -> None:
 
     clipped_value = max(0.0, min(1.0, numeric_value))
     st.write(f"{label}: {clipped_value:.2f}")
-    st.progress(int(round(clipped_value * 100)))
+    
+    # Only show progress bar for non-descriptive metrics (risk and capacity metrics)
+    if column_name not in DESCRIPTIVE_METRICS:
+        st.progress(int(round(clipped_value * 100)))

@@ -2,11 +2,11 @@
 
 This is the main entry point orchestrating all UI elements. The layout follows
 World Bank PRWP 11309 structure:
-  1. Header: Project title and reference to World Bank research
-  2. Macro-Indicators: Three key metrics (Security, Water, Economic)
-  3. Advanced Geospatial Map: Choropleth of selected index across CAR
-  4. Multidimensional Profile: Radar chart for detailed cell analysis
-  5. Methodology Expander: Explanation of data sources and index definitions
+    1. Header: Project title and reference to World Bank research
+    2. Macro-Indicators: Three proxy-based summary metrics
+    3. Advanced Geospatial Map: Choropleth of selected index across CAR
+    4. Multidimensional Profile: Radar chart for detailed cell analysis
+    5. Methodology Expander: Explanation of proxy sources and index definitions
 
 DESIGN PHILOSOPHY:
   - Non-technical language for NGO/donor audience (no "Index_GDP_primary", use "Agriculture")
@@ -22,6 +22,10 @@ import streamlit as st
 
 from .config import (
     AVAILABLE_COLOR_SCALES,
+    PERSONA_KPI_DEFINITIONS,
+    PERSONA_OPTIONS,
+    SPATIAL_RESOLUTIONS,
+    DESCRIPTIVE_METRICS,
     CSV_PATH,
     DEFAULT_KPI_COLUMNS,
     DEFAULT_MAP_COLUMN,
@@ -29,7 +33,15 @@ from .config import (
     DETAIL_COLUMNS,
     SHP_PATH,
 )
-from .data import build_risk_ranking, get_csv_year_options, get_index_columns, get_prefecture_options, load_dashboard_data
+from .data import (
+    aggregate_by_resolution,
+    build_risk_ranking,
+    compute_overall_vulnerability,
+    get_csv_year_options,
+    get_index_columns,
+    get_prefecture_options,
+    load_dashboard_data,
+)
 from .formatting import label_for_column, safe_float
 from .visuals import build_map, build_radar_chart
 
@@ -71,20 +83,7 @@ def main() -> None:
     Orchestrates all UI sections: sidebar filters, macro-indicator cards,
     choropleth map, detail panel (radar chart), and methodology reference.
     """
-    # === HEADER ===
-    st.title("RR_WLD 2025-520 CAR Dashboard")
-    st.caption(
-        "Interactive dashboard built from the RR_WLD 2025-520 reproducibility package "
-        "for the Central African Republic. The active workspace snapshot exposes raw "
-        "socioeconomic proxies that are normalized for comparison across territories."
-    )
-    st.info(
-        "📍 The dashboard normalizes the RR_WLD proxy layers to a 0–1 scale so you can "
-        "compare grid cells consistently. Missing values remain visible as field reality, "
-        "not hidden or imputed data."
-    )
-
-    # === DATA LOADING ===
+    # === DATA LOADING (Before UI so we can use persona in title) ===
     try:
         available_years = get_csv_year_options(str(CSV_PATH))
         if not available_years:
@@ -105,15 +104,20 @@ def main() -> None:
         st.error("No index columns were found in the dataset.")
         st.stop()
 
-    # === SIDEBAR - TERRITORY FILTER ===
+    # === SIDEBAR - Organize into logical groups ===
     with st.sidebar:
-        st.markdown("### Filters")
+        # GROUP 1: User Profile
+        st.subheader("👤 User Profile")
+        persona = st.radio("Select your role/view", options=PERSONA_OPTIONS, index=0)
+        st.divider()
+
+        # GROUP 2: Spatial Filters
+        st.subheader("🗺️ Spatial Filters")
         prefecture_options = get_prefecture_options(dashboard_gdf)
         if not prefecture_options:
             st.error("No prefecture names were found in the dataset.")
             st.stop()
 
-        # Territory selector: "All territories" shows entire CAR
         territory_choice = st.selectbox(
             "Select territory (optional)",
             options=["All territories"] + prefecture_options,
@@ -121,9 +125,16 @@ def main() -> None:
             help="Filter by prefecture or view the entire country.",
         )
 
-    # === SIDEBAR - MAP VISUAL ENCODING ===
-    with st.sidebar:
-        st.markdown("### Map Visual Encoding")
+        resolution_option = st.selectbox(
+            "Spatial Resolution",
+            options=SPATIAL_RESOLUTIONS,
+            index=0,
+            help="Choose map aggregation level: grid cell, city, sub-prefecture, or prefecture.",
+        )
+        st.divider()
+
+        # GROUP 3: Data Visualization
+        st.subheader("📊 Data Visualization")
         selected_map_metric = select_metric(
             "Which index to highlight?",
             options=index_columns,
@@ -135,10 +146,10 @@ def main() -> None:
             index=AVAILABLE_COLOR_SCALES.index(DEFAULT_MAP_SCALE),
             help="Choose a scale that works for your device/audience.",
         )
+        st.divider()
 
-    # === SIDEBAR - RISK RANKING CONTROLS ===
-    with st.sidebar:
-        st.markdown("### Top-10 Risk Ranking")
+        # GROUP 4: Ranking & KPI Configuration
+        st.subheader("🎯 Ranking & Summary")
         ranking_level_label = st.selectbox(
             "Rank by",
             options=["Grid cells (5 km squares)", "Sub-prefectures"],
@@ -153,10 +164,6 @@ def main() -> None:
             step=1,
             help="Select how many of the most at-risk locations to show.",
         )
-
-    # === SIDEBAR - KPI CARDS CONFIGURATION ===
-    with st.sidebar:
-        st.markdown("### Quick Summary Cards")
         st.caption("Top 3 metrics for this territory (mean values)")
         selected_kpi_columns = [
             select_metric(
@@ -190,22 +197,63 @@ def main() -> None:
         st.warning(f"No spatial features were found for {display_name}.")
         st.stop()
 
+    # Aggregate if a higher administrative level is selected
+    aggregated_gdf = aggregate_by_resolution(filtered_gdf, resolution_option)
+
+    # Active-data-only path: keep the vulnerability hook as a safe no-op.
+    aggregated_gdf = compute_overall_vulnerability(aggregated_gdf)
+
+    # Refresh index columns after potential computation
+    index_columns = get_index_columns(aggregated_gdf)
+    # Ensure the previously selected map metric is still available after aggregation
+    try:
+        if selected_map_metric not in index_columns and index_columns:
+            selected_map_metric = index_columns[0]
+    except NameError:
+        # selected_map_metric may not be defined in some execution paths; ignore
+        pass
+
     # === MACRO-INDICATORS (TOP THREE CARDS) ===
-    st.subheader(f"Macro-Indicators: {display_name}")
+    st.title("🇨🇫 CAR Vulnerability Dashboard")
+    st.markdown(f"### 🎯 View: *{persona}*")
+    st.divider()
+
+    st.subheader(f"Proxy-Based Macro Indicators: {display_name}")
+    st.caption("These summary cards are computed from the active proxy layers bundled in this workspace.")
     metric_columns = st.columns(3)
-    metric_values = [
-        (selected_kpi_columns[0], filtered_gdf[selected_kpi_columns[0]].mean(skipna=True)),
-        (selected_kpi_columns[1], filtered_gdf[selected_kpi_columns[1]].mean(skipna=True)),
-        (selected_kpi_columns[2], filtered_gdf[selected_kpi_columns[2]].mean(skipna=True)),
-    ]
+
+    # Persona-driven KPI selection using only the active proxy bundle.
+    persona_metrics = PERSONA_KPI_DEFINITIONS[persona]
+    metric_values = []
+    for metric_label, candidate_columns in persona_metrics:
+        available_columns = [column for column in candidate_columns if column in aggregated_gdf.columns]
+        if available_columns:
+            metric_value = aggregated_gdf[available_columns].mean(axis=1, skipna=True).mean(skipna=True)
+        else:
+            metric_value = pd.NA
+        metric_values.append((metric_label, metric_value))
 
     for column, (metric_name, value) in zip(metric_columns, metric_values, strict=True):
         with column:
             metric_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
-            st.metric(label_for_column(metric_name), metric_text)
+            st.metric(metric_name, metric_text)
+
+    # === OVERALL VULNERABILITY SCORE ===
+    st.divider()
+    st.markdown("### Overall Vulnerability Score")
+    st.caption("Composite proxy index combining access, activity, and exposure layers (0=Low Risk, 1=High Risk).")
+    
+    if "Index_Vulnerab_Final" in aggregated_gdf.columns:
+        vuln_score = aggregated_gdf["Index_Vulnerab_Final"].mean(skipna=True)
+        vuln_text = "N/A" if pd.isna(vuln_score) else f"{float(vuln_score):.2f}"
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.metric("Territory Vulnerability", vuln_text)
+    else:
+        st.info("Overall vulnerability score not available in the current dataset.")
 
     ranking_level = "subprefecture" if ranking_level_label == "Sub-prefectures" else "cell"
-    ranking_gdf = build_risk_ranking(filtered_gdf, selected_map_metric, level=ranking_level, top_n=int(top_n))
+    ranking_gdf = build_risk_ranking(aggregated_gdf, selected_map_metric, level=ranking_level, top_n=int(top_n))
 
     # === ADVANCED GEOSPATIAL MAP ===
     st.markdown("### Advanced Geospatial Map")
@@ -214,33 +262,13 @@ def main() -> None:
         "Red markers show the most at-risk locations for the selected factor."
     )
     choropleth_figure = build_map(
-        filtered_gdf,
+        aggregated_gdf,
         selected_map_metric,
         selected_color_scale,
         hover_columns=selected_kpi_columns,
         highlight_gdf=ranking_gdf,
     )
     st.plotly_chart(choropleth_figure, width="stretch")
-
-    st.markdown(f"### Top {int(top_n)} most at-risk locations")
-    st.caption(
-        f"Lower values mean higher risk. Ranking is based on {label_for_column(selected_map_metric)} and "
-        f"the current territory filter."
-    )
-    ranking_columns = [
-        column
-        for column in ["rank", "label", "value", "Prefecture", "Sous-prefecture", "id"]
-        if column in ranking_gdf.columns
-    ]
-    if not ranking_gdf.empty:
-        ranking_view = ranking_gdf[ranking_columns].copy()
-        ranking_view = ranking_view.rename(columns={"value": label_for_column(selected_map_metric)})
-        ranking_view[label_for_column(selected_map_metric)] = ranking_view[label_for_column(selected_map_metric)].map(
-            lambda value: f"{float(value):.2f}" if pd.notna(value) else "N/A"
-        )
-        st.dataframe(ranking_view, use_container_width=True, hide_index=True)
-    else:
-        st.info("No ranked locations were available for the selected factor.")
 
     st.markdown("### Year timeline")
     st.caption(
@@ -253,40 +281,57 @@ def main() -> None:
         help="Drag across years to update the data slice shown in the map and detail panel.",
     )
 
-    # === MULTIDIMENSIONAL PROFILE (DETAIL PANEL) ===
-    st.markdown("### Multidimensional Profile")
-    st.caption(
-        "Inspect a specific grid cell to see its 5-dimensional vulnerability profile: "
-        "primary economy, overall economy, health access, water access, and education access."
-    )
+    # === SIDE-BY-SIDE LAYOUT: Ranking + Detail Panel ===
+    left_col, right_col = st.columns([1, 1])
 
-    detail_cell_id = st.selectbox(
-        "Select a grid cell ID to analyze (optional)",
-        options=[""] + sorted(filtered_gdf["id"].dropna().astype(str).unique().tolist()),
-        index=0,
-        help="Shows detailed radar chart and location info for the selected cell.",
-    )
+    # LEFT COLUMN: Top-Risk-Locations Ranking
+    with left_col:
+        if selected_map_metric in DESCRIPTIVE_METRICS:
+            st.info(
+                "Ranking is disabled for purely informational/descriptive metrics "
+                "to avoid implying a hierarchy of vulnerability. "
+                "Use the map's color scale to explore the spatial distribution of this measure."
+            )
+        else:
+            st.markdown(f"### Top {int(top_n)} most at-risk locations")
+            st.caption(
+                f"Lower values mean higher risk. Ranking is based on {label_for_column(selected_map_metric)} and "
+                f"the current territory filter."
+            )
+            ranking_columns = [
+                column
+                for column in ["rank", "label", "value", "Prefecture", "Sous-prefecture", "id"]
+                if column in ranking_gdf.columns
+            ]
+            if not ranking_gdf.empty:
+                ranking_view = ranking_gdf[ranking_columns].copy()
+                ranking_view = ranking_view.rename(columns={"value": label_for_column(selected_map_metric)})
+                ranking_view[label_for_column(selected_map_metric)] = ranking_view[label_for_column(selected_map_metric)].map(
+                    lambda value: f"{float(value):.2f}" if pd.notna(value) else "N/A"
+                )
+                st.dataframe(ranking_view, use_container_width=True, hide_index=True)
+            else:
+                st.info("No ranked locations were available for the selected factor.")
 
-    if detail_cell_id and detail_cell_id != "":
-        try:
-            detail = filtered_gdf[filtered_gdf["id"].astype(str) == detail_cell_id]
-            if not detail.empty:
-                row = detail.iloc[0]
+    # RIGHT COLUMN: Multidimensional Profile
+    with right_col:
+        st.markdown("### Multidimensional Profile")
+        st.caption("Inspect a grid cell to see its 5-dimensional proxy profile.")
 
-                col1, col2 = st.columns([2, 1])
+        detail_cell_id = st.selectbox(
+            "Select a grid cell ID to analyze (optional)",
+            options=[""] + sorted(aggregated_gdf["id"].dropna().astype(str).unique().tolist()),
+            index=0,
+            help="Shows detailed radar chart and location info for the selected cell.",
+        )
 
-                # LEFT: Radar Chart (5 Dimensions)
-                with col1:
-                    st.markdown("#### 5-Dimensional Radar Chart")
-                    st.caption(
-                        "Each dimension extends from 0 (high risk) to 1 (high safety). "
-                        "Missing data (field insecurity) shown as -0.1 (off-scale)."
-                    )
-                    radar_fig = build_radar_chart(row)
-                    st.plotly_chart(radar_fig, width="stretch")
+        if detail_cell_id and detail_cell_id != "":
+            try:
+                detail = aggregated_gdf[aggregated_gdf["id"].astype(str) == detail_cell_id]
+                if not detail.empty:
+                    row = detail.iloc[0]
 
-                # RIGHT: Location & Context
-                with col2:
+                    # Location & Context
                     st.markdown("#### Location & Context")
                     prefecture_value = row.get("Prefecture", pd.NA)
                     sous_pref_value = row.get("Sous-prefecture", pd.NA)
@@ -294,28 +339,38 @@ def main() -> None:
                     sous_pref_str = str(sous_pref_value) if pd.notna(sous_pref_value) else "Unknown"
                     year_val = int(row.get("Year", 0)) if pd.notna(row.get("Year")) else 0
 
-                    st.info(f"**Prefecture:** {prefecture_str}\n\n**Sous-prefecture:** {sous_pref_str}\n\n**Year:** {year_val}")
+                    st.caption(f"**Prefecture:** {prefecture_str} | **Sous-prefecture:** {sous_pref_str} | **Year:** {year_val}")
 
-                    st.warning(
-                        "The RR_WLD package snapshot in this workspace does not include the "
-                        "separate access/conflict layers used in the published methodology. "
-                        "This panel therefore reports the available proxy layers only."
+                    # Radar Chart
+                    st.markdown("#### 5-Dimensional Proxy Radar Chart")
+                    st.caption(
+                        "Each dimension extends from 0 (high risk) to 1 (high safety). "
+                        "Missing data (field insecurity) shown as -0.1 (off-scale)."
                     )
+                    radar_fig = build_radar_chart(row)
+                    st.plotly_chart(radar_fig, use_container_width=True)
 
-                    # Show all 5 dimensions in vertical list
-                    st.markdown("#### Dimension Values")
-                    for col in DETAIL_COLUMNS:
-                        val = safe_float(row.get(col, pd.NA))
-                        val_str = f"{val:.2f}" if val is not None else "N/A"
-                        st.write(f"**{label_for_column(col)}:** {val_str}")
+                else:
+                    st.warning(f"Grid cell ID {detail_cell_id} not found in filtered dataset.")
+            except (ValueError, KeyError, IndexError):
+                st.error(f"Could not load details for cell ID {detail_cell_id}.")
 
-            else:
-                st.warning(f"Grid cell ID {detail_cell_id} not found in filtered dataset.")
-        except (ValueError, KeyError, IndexError):
-            st.error(f"Could not load details for cell ID {detail_cell_id}.")
+    st.divider()
 
-    # === METHODOLOGY & DATA SOURCES (EXPANDER) ===
-    with st.expander("📚 Methodology & Data Sources", expanded=False):
+    # === METHODOLOGY & DATA SOURCES (EXPANDER - moved to bottom) ===
+    with st.expander("📖 Read Methodology, Context & How to Use this Dashboard", expanded=False):
+        st.markdown("#### 📍 Dashboard Context")
+        st.markdown(
+            "Interactive dashboard built from the RR_WLD 2025-520 reproducibility package "
+            "for the Central African Republic. The workspace leverages alternative data sources "
+            "(satellite imagery, nighttime lights, geocoded infrastructure) to bridge gaps in traditional census data."
+        )
+        st.info(
+            "📍 Alternative data sources (satellite imagery, nighttime lights, geocoded infrastructure) "
+            "are explicitly leveraged to bridge gaps caused by conflict and institutional fragility."
+        )
+
+    with st.expander("📚 Data Sources & Technical Details", expanded=False):
         st.markdown("""
                 #### RR_WLD 2025-520 Data Package
         
@@ -342,8 +397,8 @@ def main() -> None:
         
         **Geographic Resolution:**
         
-                All data is aggregated to 5×5 km grid cells across CAR. That resolution is fine enough
-                for territorial comparison while still responsive in Streamlit.
+            Data can be explored at multiple spatial resolutions. Use the "Spatial Resolution" selector in the sidebar
+            to dynamically aggregate grid cells into City (Admin 3), Sous-prefecture (Admin 2), or Prefecture (Admin 1) levels.
         
         **Key References:**
         

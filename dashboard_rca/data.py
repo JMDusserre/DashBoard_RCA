@@ -15,9 +15,10 @@ RR_WLD 2025-520 Data Reality:
 from __future__ import annotations
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
-from .config import INDEX_PREFIX, FIELD_RISK_ORIENTATION
+from .config import INDEX_PREFIX
 
 
 RAW_PROXY_COLUMNS = [
@@ -236,6 +237,125 @@ def get_index_columns(gdf: gpd.GeoDataFrame) -> list[str]:
     ]
 
 
+def compute_overall_vulnerability(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Compute an active-data proxy for overall vulnerability.
+
+    The workspace does not include the archived official PRWP component layers,
+    so this function builds a transparent proxy index from the normalized active
+    `Index_*` layers that are available in the bundle.
+
+    The proxy is scaled so that higher values mean higher vulnerability.
+    """
+    result = gdf.copy()
+
+    component_groups = {
+        # Lower access or lower activity implies higher vulnerability, so these are inverted.
+        "access_proxy": [
+            "Index_NTLsum",
+            "Index_NTLmean",
+            "Index_Water",
+            "Index_BuiltUp",
+            "Index_share_builtup",
+            "Index_share_cropland",
+        ],
+        # Higher pressure/exposure implies higher vulnerability, so these are used directly.
+        "pressure_proxy": [
+            "Index_population",
+            "Index_Deforest",
+            "Index_Main_Mines",
+            "Index_Diamond_ArtisanalMines",
+            "Index_Boutiques",
+        ],
+    }
+
+    access_values: list[pd.Series] = []
+    for column in component_groups["access_proxy"]:
+        if column in result.columns:
+            access_values.append(1 - pd.to_numeric(result[column], errors="coerce"))
+
+    pressure_values: list[pd.Series] = []
+    for column in component_groups["pressure_proxy"]:
+        if column in result.columns:
+            pressure_values.append(pd.to_numeric(result[column], errors="coerce"))
+
+    all_components = access_values + pressure_values
+    if not all_components:
+        result["Index_Vulnerab_Final"] = pd.NA
+        return result
+
+    component_frame = pd.concat(all_components, axis=1)
+    result["Index_Vulnerab_Final"] = component_frame.mean(axis=1, skipna=True)
+
+    return result
+
+
+def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
+    """Aggregate the GeoDataFrame to the selected spatial resolution.
+
+    Args:
+        gdf: input GeoDataFrame at grid-cell resolution
+        resolution: one of the human-facing options defined in config.SPATIAL_RESOLUTIONS
+
+    Returns:
+        Aggregated GeoDataFrame where geometries are dissolved by the chosen
+        administrative unit and numeric metrics are averaged (mean).
+    """
+    gdf = gdf.copy()
+
+    # Map resolution to column names present in the dataset
+    if resolution.startswith("Grid cell"):
+        return gdf
+
+    if resolution.startswith("Prefecture"):
+        group_col = "Prefecture" if "Prefecture" in gdf.columns else None
+    elif resolution.startswith("Sous-prefecture"):
+        group_col = "Sous-prefecture" if "Sous-prefecture" in gdf.columns else None
+    elif resolution.startswith("City"):
+        # Try common city/admin3 column names
+        group_col = next((c for c in ["City", "ADM3", "ADMIN3"] if c in gdf.columns), None)
+    else:
+        group_col = None
+
+    if not group_col:
+        # If the requested grouping column is not present, return original gdf
+        return gdf
+
+    # Buffer Trick: reproject to a metric CRS, expand geometries slightly so
+    # adjacent grid cells overlap, dissolve them, then contract them back.
+    # This removes internal slivers without buffering in geographic degrees.
+    target_crs = gdf.estimate_utm_crs() if gdf.crs and gdf.crs.is_geographic else gdf.crs
+    working_gdf = gdf.to_crs(target_crs) if target_crs and target_crs != gdf.crs else gdf.copy()
+    buffer_distance = 10.0
+    working_gdf[working_gdf.geometry.name] = working_gdf.geometry.buffer(buffer_distance)
+
+    # Dissolve by group_col while keeping non-numeric attributes stable.
+    aggfunc: dict[str, str] = {}
+    for column in working_gdf.columns:
+        if column in {group_col, working_gdf.geometry.name}:
+            continue
+        if pd.api.types.is_numeric_dtype(working_gdf[column]):
+            aggfunc[column] = "mean"
+        else:
+            aggfunc[column] = "first"
+
+    aggregated = working_gdf.dissolve(by=group_col, aggfunc=aggfunc)
+
+    # After dissolve, the index is the group name; bring it back as a column.
+    aggregated = aggregated.reset_index().rename(columns={group_col: group_col})
+
+    # Contract the melted geometry back to its original size.
+    aggregated[aggregated.geometry.name] = aggregated.geometry.buffer(-buffer_distance)
+
+    # Create a representative geometry point for labeling and ranking.
+    if target_crs and gdf.crs and target_crs != gdf.crs:
+        aggregated = aggregated.to_crs(gdf.crs)
+    if "geometry" in aggregated.columns:
+        aggregated["geometry"] = aggregated["geometry"].buffer(0)
+    aggregated = gpd.GeoDataFrame(aggregated, geometry="geometry", crs=gdf.crs)
+
+    return aggregated
+
+
 def build_risk_ranking(
     gdf: gpd.GeoDataFrame,
     metric_column: str,
@@ -302,10 +422,7 @@ def build_risk_ranking(
         )
 
     sort_column = metric_column if metric_column in result.columns else "value"
-    # Determine sort direction based on field risk semantics
-    # Default to ascending (lower values = more risk) if not in config
-    ascending = FIELD_RISK_ORIENTATION.get(metric_column, "ascending") == "ascending"
-    result = result.sort_values(sort_column, ascending=ascending).head(top_n).copy()
+    result = result.sort_values(sort_column, ascending=True).head(top_n).copy()
     result = result.reset_index(drop=True)
     result["rank"] = result.index + 1
     if metric_column in result.columns:
