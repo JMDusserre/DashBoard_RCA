@@ -22,10 +22,8 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 
-# Preferred organized data layout. The app will prefer files under `data/`
-# but fall back to the legacy `RR_WLD_2025_520` bundle when the organized
-# layout hasn't been created yet. This keeps changes non-breaking while
-# encouraging a tidy workspace.
+# Preferred organized data layout. The app reads from `data/` only so the
+# workspace has a single source of truth.
 ORGANIZED_DATA_ROOT = APP_ROOT / "data"
 RAW_DATA_ROOT = ORGANIZED_DATA_ROOT / "raw"
 GIS_DATA_ROOT = ORGANIZED_DATA_ROOT / "gis"
@@ -47,13 +45,9 @@ SHP_PATH_PREFERRED = (
     / "Grid_5km_CFA_v4.shp"
 )
 
-# Legacy (original) package location — kept as a fallback so existing
-# checkouts still run without requiring an immediate reorganization.
-LEGACY_DATA_PACKAGE_ROOT = APP_ROOT / "RR_WLD_2025_520" / "Reproducibility-package" / "Inputs"
-
-# Resolve final paths at import time: prefer organized locations if present.
-CSV_PATH = CSV_PATH_PREFERRED if CSV_PATH_PREFERRED.exists() else LEGACY_DATA_PACKAGE_ROOT / "Base_CAF_v1.csv"
-SHP_PATH = SHP_PATH_PREFERRED if SHP_PATH_PREFERRED.exists() else LEGACY_DATA_PACKAGE_ROOT / "GIS" / "Grid_5km_CFA_v4.shp"
+# Resolve final paths at import time.
+CSV_PATH = CSV_PATH_PREFERRED
+SHP_PATH = SHP_PATH_PREFERRED
 
 # All normalized index columns follow this prefix pattern, enabling dynamic discovery
 # at runtime. This design allows new indices to be added without code changes.
