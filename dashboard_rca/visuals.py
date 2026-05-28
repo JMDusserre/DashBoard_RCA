@@ -37,22 +37,29 @@ World Bank PRWP 11309 Alignment:
 
 from __future__ import annotations
 
-import geopandas as gpd
-import pandas as pd
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 from plotly.graph_objs import Figure
 
-from .config import CAR_BOUNDS, DETAIL_COLUMNS
+import geopandas as gpd
+import pandas as pd
+
+from .config import (
+    CAPACITY_METRICS,
+    CAR_BOUNDS,
+    DETAIL_COLUMNS,
+    NO_DATA_COLOR,
+    RISK_METRICS,
+)
 from .formatting import label_for_column, safe_float
 
 
 def build_map(
     filtered_gdf: gpd.GeoDataFrame,
     color_column: str,
-    color_scale: str,
     hover_columns: list[str] | None = None,
     highlight_gdf: gpd.GeoDataFrame | None = None,
+    color_scale: str | None = None,
 ) -> Figure:
     """Create the choropleth map for the currently selected territory.
     
@@ -69,8 +76,10 @@ def build_map(
     Args:
         filtered_gdf: GeoDataFrame filtered to specific prefecture or all CAR
         color_column: Index column to encode (e.g., "Index_Absence_of_conflicts")
-        color_scale: Plotly colorscale name (e.g., "RdYlGn")
         hover_columns: Optional list of columns to display in hover tooltip
+        highlight_gdf: Optional GeoDataFrame with top-risk locations to highlight
+        color_scale: Optional color palette name (e.g., "RdYlGn", "Viridis"). 
+                     If None, uses semantic routing based on metric type.
     
     Returns:
         Plotly Figure (choropleth_map) ready for st.plotly_chart()
@@ -85,49 +94,55 @@ def build_map(
         other=-0.01,
     )
 
-    # Build custom color scale: neutral gray for missing data, then base scale.
-    base_scale = px.colors.get_colorscale(color_scale)
+    # Determine the correct color scale: use user selection or semantic routing
+    if color_scale is not None:
+        # User selected a specific palette from sidebar
+        chosen_scale = color_scale
+    else:
+        # Semantic routing based on metric type (RULE 5: Semantic Colors)
+        if color_column == "Index_Vulnerab_Final":
+            chosen_scale = "YlOrRd"  # Vulnerability standard
+        elif color_column in RISK_METRICS:
+            chosen_scale = "Reds"  # Danger/Risk standard
+        elif color_column in CAPACITY_METRICS:
+            chosen_scale = "Viridis"  # Scientific capacity standard
+        else:
+            chosen_scale = "Blues"  # Neutral descriptive standard
+
+    # Build custom color scale: neutral gray for missing data, then a metric-safe base scale.
+    base_scale = px.colors.get_colorscale(chosen_scale)
     neutral_scale = [
-        [0.0, "#f0f0f0"],      # Sentinel -0.01 maps to neutral gray
-        [0.009, "#f0f0f0"],    # Bridge to 0.01 (where base scale starts)
+        [0.0, NO_DATA_COLOR],
+        [0.009, NO_DATA_COLOR],
     ]
     # Shift base scale to [0.01, 1.0] range so red=risk, green=safety
     neutral_scale.extend([[0.01 + fraction * 0.99, color] for fraction, color in base_scale])
 
-    # Build tooltip columns in a fixed order so the hovertemplate stays readable
-    # and doesn't depend on raw Plotly field names.
-    customdata_columns: list[str] = []
-    if "Prefecture" in plot_gdf.columns:
-        customdata_columns.append("Prefecture")
-    if "Sous-prefecture" in plot_gdf.columns:
-        customdata_columns.append("Sous-prefecture")
+    hover_name_col = (
+        "Prefecture"
+        if "Prefecture" in plot_gdf.columns
+        else ("Sous-prefecture" if "Sous-prefecture" in plot_gdf.columns else None)
+    )
+
+    # Build native Plotly hover dictionaries so labels stay aligned with the data slice.
+    hover_data_dict: dict[str, object] = {plot_column: False}
+    labels_dict: dict[str, str] = {plot_column: label_for_column(color_column)}
+
+    hover_data_dict[color_column] = ":.2f"
+    labels_dict[color_column] = f"🎯 {label_for_column(color_column)}"
+
     if "Year" in plot_gdf.columns:
-        customdata_columns.append("Year")
-    if color_column in plot_gdf.columns:
-        customdata_columns.append(color_column)
+        hover_data_dict["Year"] = True
+        labels_dict["Year"] = label_for_column("Year")
 
-    seen_columns = set(customdata_columns)
-    for column in hover_columns:
-        if column != color_column and column in plot_gdf.columns and column not in seen_columns:
-            customdata_columns.append(column)
-            seen_columns.add(column)
+    if "Sous-prefecture" in plot_gdf.columns:
+        hover_data_dict["Sous-prefecture"] = True
+        labels_dict["Sous-prefecture"] = label_for_column("Sous-prefecture")
 
-    hover_lines: list[str] = []
-    if "Prefecture" in customdata_columns:
-        hover_lines.append(f"{label_for_column('Prefecture')}: %{{customdata[0]}}")
-    if "Sous-prefecture" in customdata_columns:
-        hover_lines.append(f"{label_for_column('Sous-prefecture')}: %{{customdata[{customdata_columns.index('Sous-prefecture')}]}}")
-    if "Year" in customdata_columns:
-        hover_lines.append(f"{label_for_column('Year')}: %{{customdata[{customdata_columns.index('Year')}]}}")
-    if color_column in customdata_columns:
-        hover_lines.append(
-            f"{label_for_column(color_column)}: %{{customdata[{customdata_columns.index(color_column)}]:.2f}}"
-        )
     for column in hover_columns:
-        if column != color_column and column in customdata_columns:
-            hover_lines.append(
-                f"{label_for_column(column)}: %{{customdata[{customdata_columns.index(column)}]:.2f}}"
-            )
+        if column != color_column and column in plot_gdf.columns:
+            hover_data_dict[column] = ":.2f"
+            labels_dict[column] = label_for_column(column)
 
     # Create choropleth with modern Plotly API (not deprecated choropleth_mapbox)
     fig = px.choropleth_map(
@@ -137,19 +152,15 @@ def build_map(
         featureidkey="id",
         color=plot_column,
         color_continuous_scale=neutral_scale,
-        hover_name="Prefecture" if "Prefecture" in plot_gdf.columns else None,
-        hover_data={column: False for column in customdata_columns},
+        hover_name=hover_name_col,
+        hover_data=hover_data_dict,
+        labels=labels_dict,
         range_color=(-0.01, 1),
         opacity=0.78,  # Slightly higher opacity reduces visible seams between cells
         zoom=5.2,      # Zoom shows full CAR at startup
         center={"lat": 6.6, "lon": 20.9},  # Hardcoded to avoid CRS warnings
         map_style="carto-positron",  # Labeled basemap provides context
         height=700,
-    )
-
-    fig.update_traces(
-        customdata=plot_gdf[customdata_columns].to_numpy(),
-        hovertemplate="<b>%{hovertext}</b><br>" + "<br>".join(hover_lines[1:]) + "<extra></extra>",
     )
 
     if highlight_gdf is not None and not highlight_gdf.empty and {"lat", "lon"}.issubset(highlight_gdf.columns):
@@ -185,7 +196,7 @@ def build_map(
         autosize=True,
         margin={"l": 0, "r": 0, "t": 0, "b": 56},
         coloraxis_colorbar=dict(
-            title=label_for_column(color_column),
+            title={"text": label_for_column(color_column)},
             orientation="h",
             x=0.5,
             xanchor="center",
@@ -193,6 +204,9 @@ def build_map(
             yanchor="top",
             thickness=14,
             len=0.86,
+            tickmode="array",
+            tickvals=[-0.01, 0.0, 1.0],
+            ticktext=["No data", "Low", "High"],
         ),
     )
 
@@ -207,6 +221,15 @@ def build_map(
                 yref="paper",
                 showarrow=False,
                 font=dict(size=14),
+            ),
+            dict(
+                text=f"Gray = no data / uninhabited ({NO_DATA_COLOR})",
+                x=0.5,
+                y=-0.2,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=11, color="#666666"),
             )
         ]
     )
@@ -258,6 +281,11 @@ def build_radar_chart(
         label = label_for_column(column)
         labels.append(label)
         numeric_value = safe_float(row.get(column, pd.NA))
+        
+        # RULE 2 (Radar Polarity): Invert risk metrics so high risk appears as low on the 0-1 scale
+        if column in RISK_METRICS and numeric_value is not None:
+            numeric_value = 1.0 - numeric_value
+        
         # Use -0.1 for NaN so it renders below zero on the radar, labeled as missing
         values.append(numeric_value if numeric_value is not None else -0.1)
 

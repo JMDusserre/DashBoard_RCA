@@ -15,10 +15,9 @@ RR_WLD 2025-520 Data Reality:
 from __future__ import annotations
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 
-from .config import INDEX_PREFIX
+from .config import INDEX_PREFIX, HUMAN_CENTRIC_METRICS
 
 
 RAW_PROXY_COLUMNS = [
@@ -289,6 +288,72 @@ def compute_overall_vulnerability(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return result
 
 
+def _resolve_grouping_column(gdf: gpd.GeoDataFrame, resolution: str) -> str | None:
+    """Resolve the grouping column based on resolution string.
+    
+    Args:
+        gdf: GeoDataFrame to check for available columns
+        resolution: Resolution option (e.g., "Prefecture", "Sous-prefecture", "City")
+    
+    Returns:
+        Column name or None if not found or Grid cell resolution selected.
+    """
+    if resolution.startswith("Grid cell"):
+        return None
+    
+    if resolution.startswith("Prefecture"):
+        return "Prefecture" if "Prefecture" in gdf.columns else None
+    elif resolution.startswith("Sous-prefecture"):
+        return "Sous-prefecture" if "Sous-prefecture" in gdf.columns else None
+    elif resolution.startswith("City"):
+        return next((c for c in ["City", "ADM3", "ADMIN3"] if c in gdf.columns), None)
+    
+    return None
+
+
+def _compute_numeric_aggregations(
+    working_gdf: gpd.GeoDataFrame,
+    group_col: str,
+    numeric_columns: list[str],
+    pop_col: str | None = None,
+) -> pd.DataFrame:
+    """Compute numeric aggregations with population masking for human-centric metrics.
+    
+    Args:
+        working_gdf: GeoDataFrame to aggregate
+        group_col: Column to group by
+        numeric_columns: List of numeric columns to aggregate
+        pop_col: Optional population column for masking human-centric metrics
+    
+    Returns:
+        DataFrame with aggregated numeric values, respecting population mask.
+    """
+    aggregated_values = []
+    
+    for group_key, group in working_gdf.groupby(group_col, dropna=False):
+        row = {group_col: group_key}
+        
+        for col in numeric_columns:
+            try:
+                if col in HUMAN_CENTRIC_METRICS and pop_col is not None:
+                    population_mask = pd.to_numeric(group[pop_col], errors="coerce") > 0
+                    valid_group = group[population_mask]
+                    if not valid_group.empty:
+                        val = pd.to_numeric(valid_group[col], errors="coerce").mean(skipna=True)
+                    else:
+                        val = pd.NA
+                else:
+                    val = pd.to_numeric(group[col], errors="coerce").mean(skipna=True)
+            except Exception:
+                val = pd.NA
+            
+            row[col] = val
+        
+        aggregated_values.append(row)
+    
+    return pd.DataFrame(aggregated_values)
+
+
 def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
     """Aggregate the GeoDataFrame to the selected spatial resolution.
 
@@ -302,58 +367,124 @@ def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDa
     """
     gdf = gdf.copy()
 
-    # Map resolution to column names present in the dataset
-    if resolution.startswith("Grid cell"):
+    # Resolve grouping column based on resolution
+    group_col = _resolve_grouping_column(gdf, resolution)
+    
+    if group_col is None:
         return gdf
 
-    if resolution.startswith("Prefecture"):
-        group_col = "Prefecture" if "Prefecture" in gdf.columns else None
-    elif resolution.startswith("Sous-prefecture"):
-        group_col = "Sous-prefecture" if "Sous-prefecture" in gdf.columns else None
-    elif resolution.startswith("City"):
-        # Try common city/admin3 column names
-        group_col = next((c for c in ["City", "ADM3", "ADMIN3"] if c in gdf.columns), None)
-    else:
-        group_col = None
-
-    if not group_col:
-        # If the requested grouping column is not present, return original gdf
-        return gdf
-
-    # Buffer Trick: reproject to a metric CRS, expand geometries slightly so
-    # adjacent grid cells overlap, dissolve them, then contract them back.
-    # This removes internal slivers without buffering in geographic degrees.
+    # Prepare CRS for geometry operations
     target_crs = gdf.estimate_utm_crs() if gdf.crs and gdf.crs.is_geographic else gdf.crs
     working_gdf = gdf.to_crs(target_crs) if target_crs and target_crs != gdf.crs else gdf.copy()
     buffer_distance = 10.0
     working_gdf[working_gdf.geometry.name] = working_gdf.geometry.buffer(buffer_distance)
 
-    # Dissolve by group_col while keeping non-numeric attributes stable.
-    aggfunc: dict[str, str] = {}
-    for column in working_gdf.columns:
-        if column in {group_col, working_gdf.geometry.name}:
-            continue
-        if pd.api.types.is_numeric_dtype(working_gdf[column]):
-            aggfunc[column] = "mean"
-        else:
-            aggfunc[column] = "first"
+    # Compute numeric aggregations with population masking
+    numeric_columns = [c for c in working_gdf.columns if pd.api.types.is_numeric_dtype(working_gdf[c])]
+    pop_col = "population" if "population" in working_gdf.columns else (
+        "Index_population" if "Index_population" in working_gdf.columns else None
+    )
+    
+    numeric_df = _compute_numeric_aggregations(working_gdf, group_col, numeric_columns, pop_col)
 
-    aggregated = working_gdf.dissolve(by=group_col, aggfunc=aggfunc)
+    # Merge with dissolved geometries
+    dissolved = working_gdf.dissolve(by=group_col)
+    dissolved = dissolved.reset_index()
+    dissolved[dissolved.geometry.name] = dissolved.geometry.buffer(-buffer_distance)
+    merged = dissolved.merge(numeric_df, on=group_col, how="left")
 
-    # After dissolve, the index is the group name; bring it back as a column.
-    aggregated = aggregated.reset_index().rename(columns={group_col: group_col})
-
-    # Contract the melted geometry back to its original size.
-    aggregated[aggregated.geometry.name] = aggregated.geometry.buffer(-buffer_distance)
-
-    # Create a representative geometry point for labeling and ranking.
+    # Finalize CRS and geometry
     if target_crs and gdf.crs and target_crs != gdf.crs:
-        aggregated = aggregated.to_crs(gdf.crs)
-    if "geometry" in aggregated.columns:
-        aggregated["geometry"] = aggregated["geometry"].buffer(0)
-    aggregated = gpd.GeoDataFrame(aggregated, geometry="geometry", crs=gdf.crs)
+        merged = merged.to_crs(gdf.crs)
+    if "geometry" in merged.columns:
+        merged["geometry"] = merged["geometry"].buffer(0)
+    merged = gpd.GeoDataFrame(merged, geometry="geometry", crs=gdf.crs)
 
-    return aggregated
+    return merged
+
+
+def _group_by_subprefecture(
+    working_gdf: gpd.GeoDataFrame,
+    metric_column: str,
+) -> gpd.GeoDataFrame:
+    """Group risk ranking by subprefecture level.
+    
+    Args:
+        working_gdf: GeoDataFrame with valid metric values
+        metric_column: Metric to use for ranking
+    
+    Returns:
+        GeoDataFrame grouped at subprefecture level with representative points.
+    """
+    group_columns = [col for col in ["Prefecture", "Sous-prefecture"] if col in working_gdf.columns]
+    
+    if not group_columns:
+        return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
+    
+    grouped_rows = []
+    
+    for group_key, group in working_gdf.groupby(group_columns, dropna=False):
+        if len(group_columns) == 1:
+            prefecture = group_key if group_columns[0] == "Prefecture" else pd.NA
+            sous_prefecture = group_key if group_columns[0] == "Sous-prefecture" else pd.NA
+        else:
+            prefecture, sous_prefecture = group_key
+        
+        geometry = group.geometry.unary_union
+        representative = geometry.representative_point() if geometry is not None else None
+        
+        grouped_rows.append({
+            "Prefecture": prefecture if "Prefecture" in group_columns else pd.NA,
+            "Sous-prefecture": sous_prefecture if "Sous-prefecture" in group_columns else pd.NA,
+            "value": group[metric_column].mean(skipna=True),
+            "geometry": representative,
+            "label": " | ".join([str(v) for v in [prefecture, sous_prefecture] if pd.notna(v)]),
+        })
+    
+    return gpd.GeoDataFrame(grouped_rows, geometry="geometry", crs=working_gdf.crs)
+
+
+def _add_cell_labels(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Add location labels to cell-level ranking."""
+    result = gdf.copy()
+    result["label"] = result.apply(
+        lambda row: " | ".join(
+            [str(v) for v in [row.get("Prefecture", ""), row.get("Sous-prefecture", ""), row.get("id", "")] 
+             if pd.notna(v)]
+        ),
+        axis=1,
+    )
+    return result
+
+
+def _finalize_ranking(gdf: gpd.GeoDataFrame, metric_column: str, top_n: int = 10) -> gpd.GeoDataFrame:
+    """Sort, rank, and extract top-N locations.
+    
+    Args:
+        gdf: GeoDataFrame with location data
+        metric_column: Metric column to sort by
+        top_n: Number of top results to keep
+    
+    Returns:
+        Ranked and filtered GeoDataFrame with numeric ranks and lat/lon.
+    """
+    sort_column = metric_column if metric_column in gdf.columns else "value"
+    result = gdf.sort_values(sort_column, ascending=True).head(top_n).copy()
+    result = result.reset_index(drop=True)
+    result["rank"] = result.index + 1
+    
+    if metric_column in result.columns:
+        result["value"] = result[metric_column]
+    
+    # Add lat/lon for map highlighting
+    if "geometry" in result.columns and result["geometry"].notna().any():
+        result["lat"] = result.geometry.apply(lambda geom: geom.y if geom is not None else pd.NA)
+        result["lon"] = result.geometry.apply(lambda geom: geom.x if geom is not None else pd.NA)
+    else:
+        result["lat"] = pd.NA
+        result["lon"] = pd.NA
+    
+    return result
 
 
 def build_risk_ranking(
