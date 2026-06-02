@@ -40,6 +40,7 @@ from __future__ import annotations
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.graph_objs import Figure
+import mapclassify as mc
 
 import geopandas as gpd
 import pandas as pd
@@ -58,41 +59,70 @@ def build_map(
     filtered_gdf: gpd.GeoDataFrame,
     color_column: str,
     hover_columns: list[str] | None = None,
-    highlight_gdf: gpd.GeoDataFrame | None = None,
     color_scale: str | None = None,
 ) -> Figure:
-    """Create the choropleth map for the currently selected territory.
-    
-    CRITICAL DESIGN - Sentinel Value Handling:
-      Missing indices (NaN from field insecurity) are replaced with -0.01.
-      The color scale maps [-0.01, 0.009] to neutral gray (#f0f0f0), then
-      includes the full base scale for [0.01, 1.0] (red=risk, green=safe).
-      This allows viewers to instantly distinguish missing data from low-risk areas.
-    
-    CRITICAL DESIGN - Map Bounds:
-      CAR_BOUNDS are hardcoded to prevent zoom-out. This keeps decision-makers
-      focused on the territory and avoids CRS projection warnings.
-    
+    """Create a Jenks-classified choropleth map for the currently selected territory.
+
+    Missing values are preserved as a distinct "No Data" category and excluded
+    from Jenks classification so they do not distort the class break calculation.
+
     Args:
         filtered_gdf: GeoDataFrame filtered to specific prefecture or all CAR
         color_column: Index column to encode (e.g., "Index_Absence_of_conflicts")
         hover_columns: Optional list of columns to display in hover tooltip
-        highlight_gdf: Optional GeoDataFrame with top-risk locations to highlight
-        color_scale: Optional color palette name (e.g., "RdYlGn", "Viridis"). 
-                     If None, uses semantic routing based on metric type.
-    
+        color_scale: Optional color palette name (e.g., "RdYlGn", "Viridis").
+            Used as the source palette for the Jenks class colors.
+
     Returns:
         Plotly Figure (choropleth_map) ready for st.plotly_chart()
     """
     plot_gdf = filtered_gdf.copy()
-    plot_column = "__plot_color__"
+    plot_column = "__jenks_class__"
     hover_columns = hover_columns or []
-    
-    # Replace NaN with sentinel -0.01 so they render as neutral gray, not blank.
-    plot_gdf[plot_column] = plot_gdf[color_column].where(
-        plot_gdf[color_column].notna(),
-        other=-0.01,
-    )
+
+    # Keep only the columns needed for map rendering to reduce the JSON payload
+    # sent to the browser. The full GeoDataFrame can be large even when the
+    # geometry itself is simple, so dropping unused fields improves startup time.
+    required_columns = {
+        "id",
+        color_column,
+        plot_column,
+        "geometry",
+        "Prefecture",
+        "Sous-prefecture",
+        "Year",
+        *hover_columns,
+    }
+    existing_columns = [column for column in plot_gdf.columns if column in required_columns]
+    plot_gdf = plot_gdf[existing_columns].copy()
+
+    # Preserve missing values as a dedicated No Data category and exclude them from Jenks.
+    raw_values = pd.to_numeric(plot_gdf[color_column], errors="coerce")
+    no_data_mask = raw_values.isna() | raw_values.eq(-0.01)
+    valid_values = raw_values.loc[~no_data_mask].dropna()
+
+    plot_gdf[plot_column] = "No Data"
+
+    if not valid_values.empty:
+        class_count = min(5, valid_values.nunique())
+        jenks = mc.NaturalBreaks(valid_values.to_numpy(), k=class_count)
+        class_labels = [
+            "Class 1 (Low)",
+            "Class 2",
+            "Class 3",
+            "Class 4",
+            "Class 5 (High)",
+        ][:class_count]
+
+        class_codes = jenks.yb
+        valid_index = valid_values.index
+        for idx, class_code in zip(valid_index, class_codes):
+            plot_gdf.at[idx, plot_column] = class_labels[int(class_code)]
+    else:
+        class_labels = []
+
+    # Keep the raw metric available for hover even though color is categorical.
+    plot_gdf[color_column] = raw_values
 
     # Determine the correct color scale: use user selection or semantic routing
     if color_scale is not None:
@@ -109,14 +139,17 @@ def build_map(
         else:
             chosen_scale = "Blues"  # Neutral descriptive standard
 
-    # Build custom color scale: neutral gray for missing data, then a metric-safe base scale.
-    base_scale = px.colors.get_colorscale(chosen_scale)
-    neutral_scale = [
-        [0.0, NO_DATA_COLOR],
-        [0.009, NO_DATA_COLOR],
-    ]
-    # Shift base scale to [0.01, 1.0] range so red=risk, green=safety
-    neutral_scale.extend([[0.01 + fraction * 0.99, color] for fraction, color in base_scale])
+    # Build a discrete palette for Jenks classes from the selected scale.
+    if class_labels:
+        sampled_positions = [0.1, 0.3, 0.5, 0.7, 0.9][: len(class_labels)]
+        sampled_colors = px.colors.sample_colorscale(chosen_scale, sampled_positions)
+        jenks_color_map = {
+            label: color for label, color in zip(class_labels, sampled_colors)
+        }
+    else:
+        jenks_color_map = {}
+
+    jenks_color_map["No Data"] = NO_DATA_COLOR
 
     hover_name_col = (
         "Prefecture"
@@ -151,11 +184,10 @@ def build_map(
         locations=plot_gdf.index,
         featureidkey="id",
         color=plot_column,
-        color_continuous_scale=neutral_scale,
+        color_discrete_map=jenks_color_map,
         hover_name=hover_name_col,
         hover_data=hover_data_dict,
         labels=labels_dict,
-        range_color=(-0.01, 1),
         opacity=0.78,  # Slightly higher opacity reduces visible seams between cells
         zoom=5.2,      # Zoom shows full CAR at startup
         center={"lat": 6.6, "lon": 20.9},  # Hardcoded to avoid CRS warnings
@@ -163,51 +195,9 @@ def build_map(
         height=700,
     )
 
-    if highlight_gdf is not None and not highlight_gdf.empty and {"lat", "lon"}.issubset(highlight_gdf.columns):
-        highlight_text = []
-        for _, row in highlight_gdf.iterrows():
-            label = row.get("label", "")
-            value = row.get("value", pd.NA)
-            rank = row.get("rank", pd.NA)
-            value_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
-            highlight_text.append(
-                f"<b>#{rank}</b><br>{label}<br>{label_for_column(color_column)}: {value_text}"
-            )
-
-        fig.add_trace(
-            go.Scattermap(
-                lat=highlight_gdf["lat"],
-                lon=highlight_gdf["lon"],
-                mode="markers",
-                name="Top risk",
-                text=highlight_text,
-                hovertemplate="%{text}<extra></extra>",
-                marker=dict(
-                    size=16,
-                    color="#d7263d",
-                    opacity=0.9,
-                    symbol="circle",
-                    allowoverlap=True,
-                ),
-            )
-        )
-
     fig.update_layout(
         autosize=True,
         margin={"l": 0, "r": 0, "t": 0, "b": 56},
-        coloraxis_colorbar=dict(
-            title={"text": label_for_column(color_column)},
-            orientation="h",
-            x=0.5,
-            xanchor="center",
-            y=-0.12,
-            yanchor="top",
-            thickness=14,
-            len=0.86,
-            tickmode="array",
-            tickvals=[-0.01, 0.0, 1.0],
-            ticktext=["No data", "Low", "High"],
-        ),
     )
 
     # Add a simple north-arrow annotation for cartographic convention

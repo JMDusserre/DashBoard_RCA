@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import geopandas as gpd
 import pandas as pd
+import numpy as np
 
 from .config import INDEX_PREFIX, HUMAN_CENTRIC_METRICS
 
@@ -65,7 +66,7 @@ def _normalize_group(group: pd.Series) -> pd.Series:
     maximum = numeric_group.max(skipna=True)
 
     if pd.isna(minimum) or pd.isna(maximum) or maximum == minimum:
-        return pd.Series([pd.NA] * len(group), index=group.index, dtype="float64")
+        return pd.Series([np.nan] * len(group), index=group.index, dtype="float64")
 
     return (numeric_group - minimum) / (maximum - minimum)
 
@@ -138,7 +139,7 @@ def load_dashboard_data(
     # This ensures validate="1:1" will reliably catch any key mismatches.
     csv_frame["id"] = csv_frame["id"].astype(str)
     spatial_frame["id"] = spatial_frame["id"].apply(
-        lambda value: str(int(value)) if pd.notna(value) else pd.NA
+        lambda value: str(int(value)) if pd.notna(value) else np.nan
     )
 
     # The RR_WLD package uses raw territorial names; rename them into the dashboard
@@ -279,7 +280,7 @@ def compute_overall_vulnerability(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     all_components = access_values + pressure_values
     if not all_components:
-        result["Index_Vulnerab_Final"] = pd.NA
+        result["Index_Vulnerab_Final"] = np.nan
         return result
 
     component_frame = pd.concat(all_components, axis=1)
@@ -341,11 +342,11 @@ def _compute_numeric_aggregations(
                     if not valid_group.empty:
                         val = pd.to_numeric(valid_group[col], errors="coerce").mean(skipna=True)
                     else:
-                        val = pd.NA
+                        val = np.nan
                 else:
                     val = pd.to_numeric(group[col], errors="coerce").mean(skipna=True)
             except Exception:
-                val = pd.NA
+                val = np.nan
             
             row[col] = val
         
@@ -380,16 +381,26 @@ def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDa
     working_gdf[working_gdf.geometry.name] = working_gdf.geometry.buffer(buffer_distance)
 
     # Compute numeric aggregations with population masking
-    numeric_columns = [c for c in working_gdf.columns if pd.api.types.is_numeric_dtype(working_gdf[c])]
+    numeric_columns = [c for c in working_gdf.columns if c.startswith("Index_") or c in ["population", "NTLsum"]]
     pop_col = "population" if "population" in working_gdf.columns else (
         "Index_population" if "Index_population" in working_gdf.columns else None
     )
     
     numeric_df = _compute_numeric_aggregations(working_gdf, group_col, numeric_columns, pop_col)
 
+    # Force cast to float to prevent 'object' dtype breaking Plotly continuous scales
+    for col in numeric_columns:
+        if col in numeric_df.columns:
+            numeric_df[col] = pd.to_numeric(numeric_df[col], errors="coerce")
+
     # Merge with dissolved geometries
     dissolved = working_gdf.dissolve(by=group_col)
     dissolved = dissolved.reset_index()
+    
+    # SOLUTION: Drop old numeric columns from dissolved to prevent _x and _y suffix collision
+    cols_to_drop = [c for c in numeric_columns if c in dissolved.columns and c != group_col]
+    dissolved = dissolved.drop(columns=cols_to_drop)
+
     dissolved[dissolved.geometry.name] = dissolved.geometry.buffer(-buffer_distance)
     merged = dissolved.merge(numeric_df, on=group_col, how="left")
 
@@ -403,168 +414,3 @@ def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDa
     return merged
 
 
-def _group_by_subprefecture(
-    working_gdf: gpd.GeoDataFrame,
-    metric_column: str,
-) -> gpd.GeoDataFrame:
-    """Group risk ranking by subprefecture level.
-    
-    Args:
-        working_gdf: GeoDataFrame with valid metric values
-        metric_column: Metric to use for ranking
-    
-    Returns:
-        GeoDataFrame grouped at subprefecture level with representative points.
-    """
-    group_columns = [col for col in ["Prefecture", "Sous-prefecture"] if col in working_gdf.columns]
-    
-    if not group_columns:
-        return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
-    
-    grouped_rows = []
-    
-    for group_key, group in working_gdf.groupby(group_columns, dropna=False):
-        if len(group_columns) == 1:
-            prefecture = group_key if group_columns[0] == "Prefecture" else pd.NA
-            sous_prefecture = group_key if group_columns[0] == "Sous-prefecture" else pd.NA
-        else:
-            prefecture, sous_prefecture = group_key
-        
-        geometry = group.geometry.unary_union
-        representative = geometry.representative_point() if geometry is not None else None
-        
-        grouped_rows.append({
-            "Prefecture": prefecture if "Prefecture" in group_columns else pd.NA,
-            "Sous-prefecture": sous_prefecture if "Sous-prefecture" in group_columns else pd.NA,
-            "value": group[metric_column].mean(skipna=True),
-            "geometry": representative,
-            "label": " | ".join([str(v) for v in [prefecture, sous_prefecture] if pd.notna(v)]),
-        })
-    
-    return gpd.GeoDataFrame(grouped_rows, geometry="geometry", crs=working_gdf.crs)
-
-
-def _add_cell_labels(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Add location labels to cell-level ranking."""
-    result = gdf.copy()
-    result["label"] = result.apply(
-        lambda row: " | ".join(
-            [str(v) for v in [row.get("Prefecture", ""), row.get("Sous-prefecture", ""), row.get("id", "")] 
-             if pd.notna(v)]
-        ),
-        axis=1,
-    )
-    return result
-
-
-def _finalize_ranking(gdf: gpd.GeoDataFrame, metric_column: str, top_n: int = 10) -> gpd.GeoDataFrame:
-    """Sort, rank, and extract top-N locations.
-    
-    Args:
-        gdf: GeoDataFrame with location data
-        metric_column: Metric column to sort by
-        top_n: Number of top results to keep
-    
-    Returns:
-        Ranked and filtered GeoDataFrame with numeric ranks and lat/lon.
-    """
-    sort_column = metric_column if metric_column in gdf.columns else "value"
-    result = gdf.sort_values(sort_column, ascending=True).head(top_n).copy()
-    result = result.reset_index(drop=True)
-    result["rank"] = result.index + 1
-    
-    if metric_column in result.columns:
-        result["value"] = result[metric_column]
-    
-    # Add lat/lon for map highlighting
-    if "geometry" in result.columns and result["geometry"].notna().any():
-        result["lat"] = result.geometry.apply(lambda geom: geom.y if geom is not None else pd.NA)
-        result["lon"] = result.geometry.apply(lambda geom: geom.x if geom is not None else pd.NA)
-    else:
-        result["lat"] = pd.NA
-        result["lon"] = pd.NA
-    
-    return result
-
-
-def build_risk_ranking(
-    gdf: gpd.GeoDataFrame,
-    metric_column: str,
-    level: str = "cell",
-    top_n: int = 10,
-) -> gpd.GeoDataFrame:
-    """Return the lowest-scoring locations for a selected metric.
-
-    Lower normalized values mean higher risk, so the returned rows are sorted
-    ascending on the selected metric.
-
-    Args:
-        gdf: Merged GeoDataFrame from load_dashboard_data().
-        metric_column: Normalized `Index_*` column to rank.
-        level: Either `cell` for 5 km squares or `subprefecture` for grouped areas.
-        top_n: Number of rows to return.
-
-    Returns:
-        GeoDataFrame with rank, label, metric value, and highlight point coordinates.
-    """
-    if metric_column not in gdf.columns:
-        return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
-
-    working = gdf.dropna(subset=[metric_column]).copy()
-
-    if working.empty:
-        return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
-
-    if level == "subprefecture":
-        group_columns = [column for column in ["Prefecture", "Sous-prefecture"] if column in working.columns]
-        if not group_columns:
-            return gpd.GeoDataFrame(columns=["rank", "label", "value", "lat", "lon", "geometry"])
-
-        grouped_rows = []
-        for group_key, group in working.groupby(group_columns, dropna=False):
-            if len(group_columns) == 1:
-                prefecture = group_key if group_columns[0] == "Prefecture" else pd.NA
-                sous_prefecture = group_key if group_columns[0] == "Sous-prefecture" else pd.NA
-            else:
-                prefecture, sous_prefecture = group_key
-            geometry = group.geometry.unary_union
-            representative = geometry.representative_point() if geometry is not None else None
-            grouped_rows.append(
-                {
-                    "Prefecture": prefecture if "Prefecture" in group_columns else pd.NA,
-                    "Sous-prefecture": sous_prefecture if "Sous-prefecture" in group_columns else pd.NA,
-                    "value": group[metric_column].mean(skipna=True),
-                    "geometry": representative,
-                    "label": " | ".join([str(value) for value in [prefecture, sous_prefecture] if pd.notna(value)]),
-                }
-            )
-        result = gpd.GeoDataFrame(grouped_rows, geometry="geometry", crs=working.crs)
-    else:
-        result = working.copy()
-        result["label"] = result.apply(
-            lambda row: " | ".join(
-                [
-                    str(value)
-                    for value in [row.get("Prefecture", ""), row.get("Sous-prefecture", ""), row.get("id", "")]
-                    if pd.notna(value)
-                ]
-            ),
-            axis=1,
-        )
-
-    sort_column = metric_column if metric_column in result.columns else "value"
-    result = result.sort_values(sort_column, ascending=True).head(top_n).copy()
-    result = result.reset_index(drop=True)
-    result["rank"] = result.index + 1
-    if metric_column in result.columns:
-        result["value"] = result[metric_column]
-    else:
-        result["value"] = result["value"]
-    result["factor_label"] = metric_column
-
-    if "geometry" in result.columns:
-        representative = result.geometry.representative_point()
-        result["lon"] = representative.x
-        result["lat"] = representative.y
-
-    return result

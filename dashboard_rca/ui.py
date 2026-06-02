@@ -24,7 +24,6 @@ from .config import (
     PERSONA_KPI_DEFINITIONS,
     PERSONA_OPTIONS,
     SPATIAL_RESOLUTIONS,
-    DESCRIPTIVE_METRICS,
     HUMAN_CENTRIC_METRICS,
     CSV_PATH,
     DEFAULT_MAP_COLUMN,
@@ -34,7 +33,6 @@ from .config import (
 )
 from .data import (
     aggregate_by_resolution,
-    build_risk_ranking,
     compute_overall_vulnerability,
     get_csv_year_options,
     get_index_columns,
@@ -81,11 +79,11 @@ def select_metric(label: str, options: list[str], default_value: str) -> str:
 def _build_sidebar(
     dashboard_gdf,
     index_columns: list[str],
-) -> tuple[str, str, str, str, int, str, str]:
+) -> tuple[str, str, str, str, str]:
     """Build sidebar controls and return user selections.
     
     Returns:
-        Tuple of (persona, territory_choice, resolution_option, selected_map_metric, top_n, ranking_level, selected_color_scale)
+        Tuple of (persona, territory_choice, resolution_option, selected_map_metric, selected_color_scale)
     """
     with st.sidebar:
         st.subheader("👤 User Profile")
@@ -127,26 +125,7 @@ def _build_sidebar(
             index=AVAILABLE_COLOR_SCALES.index(DEFAULT_MAP_SCALE),
             help="Choose a color palette for the map visualization.",
         )
-        st.divider()
-
-        st.subheader("🎯 Ranking & Summary")
-        ranking_level_label = st.selectbox(
-            "Rank by",
-            options=["Grid cells (5 km squares)", "Sub-prefectures"],
-            index=0,
-            help="Choose whether to rank individual cells or grouped sub-prefectures.",
-        )
-        top_n = st.number_input(
-            "How many results?",
-            min_value=3,
-            max_value=20,
-            value=10,
-            step=1,
-            help="Select how many of the most at-risk locations to show.",
-        )
-
-    ranking_level = "subprefecture" if ranking_level_label == "Sub-prefectures" else "cell"
-    return persona, territory_choice, resolution_option, selected_map_metric, top_n, ranking_level, selected_color_scale
+    return persona, territory_choice, resolution_option, selected_map_metric, selected_color_scale
 
 
 def _compute_kpi_values(
@@ -194,50 +173,6 @@ def _render_kpi_cards(metric_values: list[tuple[str, float | None]]) -> None:
         with column:
             metric_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
             st.metric(metric_name, metric_text)
-
-
-def _render_ranking_section(
-    ranking_gdf,
-    selected_map_metric: str,
-    top_n: int,
-) -> None:
-    """Render the top-risk locations ranking table."""
-    if selected_map_metric in DESCRIPTIVE_METRICS:
-        st.info(
-            "Ranking is disabled for purely informational/descriptive metrics "
-            "to avoid implying a hierarchy of vulnerability. "
-            "Use the map's color scale to explore the spatial distribution of this measure."
-        )
-    else:
-        unique_values_count = (
-            ranking_gdf["value"].dropna().nunique() if "value" in ranking_gdf.columns else 0
-        )
-        if unique_values_count == 1:
-            st.warning(
-                "Ranking is disabled for this metric in the selected area. The data distribution "
-                "shows massive ties (for example, widespread absolute zero infrastructure). "
-                "Displaying a Top 10 ranking would be statistically arbitrary. Please refer to the map "
-                "for spatial distribution."
-            )
-        else:
-            st.markdown(f"### Top {int(top_n)} most at-risk locations")
-            st.caption(
-                f"Lower values mean higher risk. Ranking is based on {label_for_column(selected_map_metric)} and "
-                f"the current territory filter."
-            )
-            ranking_columns = [
-                col for col in ["rank", "label", "value", "Prefecture", "Sous-prefecture", "id"]
-                if col in ranking_gdf.columns
-            ]
-            if not ranking_gdf.empty:
-                ranking_view = ranking_gdf[ranking_columns].copy()
-                ranking_view = ranking_view.rename(columns={"value": label_for_column(selected_map_metric)})
-                ranking_view[label_for_column(selected_map_metric)] = ranking_view[label_for_column(selected_map_metric)].map(
-                    lambda value: f"{float(value):.2f}" if pd.notna(value) else "N/A"
-                )
-                st.dataframe(ranking_view, use_container_width=True, hide_index=True)
-            else:
-                st.info("No ranked locations were available for the selected factor.")
 
 
 def _render_detail_panel(aggregated_gdf) -> None:
@@ -380,7 +315,7 @@ def main() -> None:
         st.stop()
 
     # === SIDEBAR - Organize into logical groups ===
-    persona, territory_choice, resolution_option, selected_map_metric, top_n, ranking_level, selected_color_scale = _build_sidebar(
+    persona, territory_choice, resolution_option, selected_map_metric, selected_color_scale = _build_sidebar(
         dashboard_gdf, index_columns
     )
 
@@ -436,19 +371,15 @@ def main() -> None:
     else:
         st.info("Overall vulnerability score not available in the current dataset.")
 
-    ranking_gdf = build_risk_ranking(aggregated_gdf, selected_map_metric, level=ranking_level, top_n=int(top_n))
-
     # === ADVANCED GEOSPATIAL MAP ===
     st.markdown("### Advanced Geospatial Map")
     st.caption(
         "5×5 km grid cells colored by the selected normalized proxy. Light gray indicates missing data. "
-        "Red markers show the most at-risk locations for the selected factor."
     )
     choropleth_figure = build_map(
         aggregated_gdf,
         selected_map_metric,
         hover_columns=[selected_map_metric],
-        highlight_gdf=ranking_gdf,
         color_scale=selected_color_scale,
     )
     st.plotly_chart(choropleth_figure, width="stretch")
@@ -464,14 +395,8 @@ def main() -> None:
         help="Drag across years to update the data slice shown in the map and detail panel.",
     )
 
-    # === SIDE-BY-SIDE LAYOUT: Ranking + Detail Panel ===
-    left_col, right_col = st.columns([1, 1])
-
-    with left_col:
-        _render_ranking_section(ranking_gdf, selected_map_metric, top_n)
-
-    with right_col:
-        _render_detail_panel(aggregated_gdf)
+    # === DETAIL PANEL ===
+    _render_detail_panel(aggregated_gdf)
 
     st.divider()
 
