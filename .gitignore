@@ -7,7 +7,7 @@ __pycache__/
 *.pyc
 
 # Data folder (raw/gis)
-data/
+#data/
 
 # Jupyter
 .ipynb_checkpoints/
