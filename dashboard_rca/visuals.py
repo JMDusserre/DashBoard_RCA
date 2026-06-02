@@ -96,6 +96,11 @@ def build_map(
     existing_columns = [column for column in plot_gdf.columns if column in required_columns]
     plot_gdf = plot_gdf[existing_columns].copy()
 
+    # Simplify polygon geometries to reduce browser rendering lag.
+    # Tolerance of 0.005 degrees (~500m at equator) removes minor vertex details
+    # while preserving topology and overall shape for all 20,000+ grid cells.
+    plot_gdf['geometry'] = plot_gdf['geometry'].simplify(tolerance=0.005, preserve_topology=True)
+
     # Preserve missing values as a dedicated No Data category and exclude them from Jenks.
     raw_values = pd.to_numeric(plot_gdf[color_column], errors="coerce")
     no_data_mask = raw_values.isna() | raw_values.eq(-0.01)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import geopandas as gpd
 import pandas as pd
 import numpy as np
+import streamlit as st
 
 from .config import INDEX_PREFIX, HUMAN_CENTRIC_METRICS
 
@@ -355,18 +356,20 @@ def _compute_numeric_aggregations(
     return pd.DataFrame(aggregated_values)
 
 
-def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
+@st.cache_data
+def aggregate_by_resolution(_gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
     """Aggregate the GeoDataFrame to the selected spatial resolution.
 
     Args:
-        gdf: input GeoDataFrame at grid-cell resolution
+        _gdf: input GeoDataFrame at grid-cell resolution
+            (leading underscore prevents Streamlit from hashing this unhashable type)
         resolution: one of the human-facing options defined in config.SPATIAL_RESOLUTIONS
 
     Returns:
         Aggregated GeoDataFrame where geometries are dissolved by the chosen
         administrative unit and numeric metrics are averaged (mean).
     """
-    gdf = gdf.copy()
+    gdf = _gdf.copy()
 
     # Resolve grouping column based on resolution
     group_col = _resolve_grouping_column(gdf, resolution)

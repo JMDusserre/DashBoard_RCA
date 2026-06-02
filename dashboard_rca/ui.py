@@ -376,12 +376,13 @@ def main() -> None:
     st.caption(
         "5×5 km grid cells colored by the selected normalized proxy. Light gray indicates missing data. "
     )
-    choropleth_figure = build_map(
-        aggregated_gdf,
-        selected_map_metric,
-        hover_columns=[selected_map_metric],
-        color_scale=selected_color_scale,
-    )
+    with st.spinner("Generating spatial matrix. This may take a few seconds for high-resolution grid cells..."):
+        choropleth_figure = build_map(
+            aggregated_gdf,
+            selected_map_metric,
+            hover_columns=[selected_map_metric],
+            color_scale=selected_color_scale,
+        )
     st.plotly_chart(choropleth_figure, width="stretch")
 
     st.markdown("### Year timeline")
