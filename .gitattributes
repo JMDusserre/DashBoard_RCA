@@ -1,0 +1,4 @@
+data/**/*.csv filter=lfs diff=lfs merge=lfs -text
+data/**/*.shp filter=lfs diff=lfs merge=lfs -text
+data/**/*.dbf filter=lfs diff=lfs merge=lfs -text
+data/**/*.shx filter=lfs diff=lfs merge=lfs -text
