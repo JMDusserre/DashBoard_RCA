@@ -300,15 +300,13 @@ def _resolve_grouping_column(gdf: gpd.GeoDataFrame, resolution: str) -> str | No
     Returns:
         Column name or None if not found or Grid cell resolution selected.
     """
-    if resolution.startswith("Grid cell"):
+    if resolution.startswith("Grid Cell"):
         return None
-    
     if resolution.startswith("Prefecture"):
         return "Prefecture" if "Prefecture" in gdf.columns else None
     elif resolution.startswith("Sous-prefecture"):
         return "Sous-prefecture" if "Sous-prefecture" in gdf.columns else None
-    elif resolution.startswith("City"):
-        return next((c for c in ["City", "ADM3", "ADMIN3"] if c in gdf.columns), None)
+    
     
     return None
 

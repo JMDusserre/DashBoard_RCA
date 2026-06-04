@@ -183,6 +183,7 @@ def build_map(
             labels_dict[column] = label_for_column(column)
 
     # Create choropleth with modern Plotly API (not deprecated choropleth_mapbox)
+  # Create choropleth with modern Plotly API (not deprecated choropleth_mapbox)
     fig = px.choropleth_map(
         plot_gdf,
         geojson=plot_gdf.geometry,
@@ -190,6 +191,7 @@ def build_map(
         featureidkey="id",
         color=plot_column,
         color_discrete_map=jenks_color_map,
+        category_orders={plot_column: class_labels + ["No Data"]},  # <--- AJOUTE CETTE LIGNE ICI
         hover_name=hover_name_col,
         hover_data=hover_data_dict,
         labels=labels_dict,

@@ -183,7 +183,6 @@ PERSONA_OPTIONS = [
 # Spatial resolution options for dynamic aggregation
 SPATIAL_RESOLUTIONS = [
     "Grid cell (5×5 km)",
-    "City (Admin 3)",
     "Sous-prefecture (Admin 2)",
     "Prefecture (Admin 1)",
 ]
