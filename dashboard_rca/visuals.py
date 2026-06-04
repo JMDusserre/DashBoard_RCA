@@ -98,7 +98,7 @@ def build_map(
     # Simplify polygon geometries to reduce browser rendering lag.
     # Tolerance of 0.005 degrees (~500m at equator) removes minor vertex details
     # while preserving topology and overall shape for all 20,000+ grid cells.
-    plot_gdf['geometry'] = plot_gdf['geometry'].simplify(tolerance=0.005, preserve_topology=True)
+    # plot_gdf['geometry'] = plot_gdf['geometry'].simplify(tolerance=0.005, preserve_topology=True)
 
     # Preserve missing values as a dedicated No Data category and exclude them from Jenks.
     raw_values = pd.to_numeric(plot_gdf[color_column], errors="coerce")
@@ -182,7 +182,6 @@ def build_map(
             labels_dict[column] = label_for_column(column)
 
     # Create choropleth with modern Plotly API (not deprecated choropleth_mapbox)
-  # Create choropleth with modern Plotly API (not deprecated choropleth_mapbox)
     fig = px.choropleth_map(
         plot_gdf,
         geojson=plot_gdf.geometry,
@@ -195,7 +194,7 @@ def build_map(
         hover_data=hover_data_dict,
         labels=labels_dict,
         opacity=0.78,  # Slightly higher opacity reduces visible seams between cells
-        zoom=5.2,      # Zoom shows full CAR at startup
+        zoom=4.8,      # Zoom shows full CAR at startup
         center={"lat": 6.6, "lon": 20.9},  # Hardcoded to avoid CRS warnings
         map_style="carto-positron",  # Labeled basemap provides context
         height=700,
@@ -203,7 +202,16 @@ def build_map(
 
     fig.update_layout(
         autosize=True,
-        margin={"l": 0, "r": 0, "t": 0, "b": 56},
+        margin={"l": 0, "r": 0, "t": 0, "b": 0}, # On enlève toutes les marges blanches
+        legend=dict(
+            title_text="",          # On enlève le titre redondant de la légende
+            orientation="v",        # Verticale
+            yanchor="top",
+            y=0.98,                 # Collée en haut
+            xanchor="left",
+            x=1.01,                 # <-- POUSSE LA LÉGENDE TOTALEMENT SUR LA DROITE (hors de la carte)
+            bgcolor="rgba(255,255,255,0.6)" # Fond légèrement transparent pour faire respirer
+        )
     )
 
     # Add a simple north-arrow annotation for cartographic convention

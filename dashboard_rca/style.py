@@ -1,64 +1,44 @@
-"""Custom Streamlit styling helpers for the dashboard."""
-
-from __future__ import annotations
-
 import streamlit as st
 
+def inject_custom_css():
+    st.markdown("""
+    <style>
+    /* 1. Largeur sidebar */
+    [data-testid="stSidebar"] {
+        width: 250px !important; 
+    }
 
-def inject_custom_css() -> None:
-    """Inject institutional dashboard styling without external frameworks."""
-    st.markdown(
-        """
-        <style>
-            #MainMenu,
-            footer,
-            header {
-                visibility: hidden;
-            }
+    /* 2. Suppression de l'espace entre le bouton de réduction et le reste */
+    [data-testid="stSidebar"] section > div {
+        padding-top: 0px !important; /* Enlève le padding interne de la section */
+    }
 
-            .stApp {
-                background: #f8f9fa;
-            }
+    /* 3. Cible spécifiquement le bloc du bouton de langue pour réduire son espace */
+    [data-testid="stSidebar"] div[data-testid="stRadio"] {
+        margin-bottom: 0px !important;
+        padding-bottom: 0px !important;
+    }
 
-            [data-testid="stSidebar"] {
-                padding-top: 1rem;
-                padding-left: 0.75rem;
-                padding-right: 0.75rem;
-                background: #ffffff;
-                border-right: 1px solid rgba(15, 23, 42, 0.08);
-            }
+    /* 4. Titres : on remonte tout */
+    [data-testid="stSidebar"] h2, 
+    [data-testid="stSidebar"] h3 {
+        margin-top: 2px !important; /* Réduit l'espace au-dessus du titre */
+        margin-bottom: 2px !important;
+        font-size: 0.85rem !important;
+    }
 
-            div[data-testid="stMetric"] {
-                background: #ffffff;
-                border: 1px solid rgba(15, 23, 42, 0.08);
-                border-radius: 8px;
-                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
-                padding: 1rem 1rem 0.85rem 1rem;
-            }
-
-            div[data-testid="stMetric"] label {
-                color: #4b5563;
-                font-size: 0.85rem;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-            }
-
-            div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-                color: #0f172a;
-                font-size: 1.6rem;
-                font-weight: 700;
-            }
-
-            div[data-testid="stMetricDelta"] {
-                font-size: 0.85rem;
-            }
-
-            .block-container {
-                padding-top: 1.5rem;
-                padding-bottom: 2rem;
-            }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    /* 5. Densité générale */
+    [data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+        gap: 0.1rem !important;
+    }
+    
+    [data-testid="stSidebar"] * {
+        font-size: 0.8rem !important;
+    }
+    
+    .block-container {
+        padding-top: 1rem !important;
+        max-width: 95% !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)

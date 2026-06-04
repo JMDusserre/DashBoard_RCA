@@ -159,7 +159,7 @@ def _render_detail_panel(aggregated_gdf) -> None:
                 st.markdown(f"#### {txt('radar_title')}")
                 st.caption(txt("radar_caption"))
                 radar_fig = build_radar_chart(row)
-                st.plotly_chart(radar_fig, use_container_width=True)
+                st.plotly_chart(radar_fig, use_container_width="stretch")
         except Exception:
             pass
 
@@ -235,7 +235,6 @@ def main() -> None:
             color_scale=selected_color_scale,
         )
     st.plotly_chart(choropleth_figure, width="stretch")
-
     st.markdown(f"### {txt('timeline')}")
     st.caption(txt("timeline_caption"))
     st.select_slider(

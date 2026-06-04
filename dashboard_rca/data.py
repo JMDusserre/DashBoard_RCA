@@ -113,6 +113,7 @@ def load_dashboard_data(
     try:
         csv_frame = pd.read_csv(csv_path, na_values=["NA", "NaN", ""])
         spatial_frame = gpd.read_file(shp_path)
+        spatial_frame['geometry'] = spatial_frame['geometry'].simplify(tolerance=0.005, preserve_topology=True)
     except FileNotFoundError as exc:
         raise FileNotFoundError(
             "The dashboard data files could not be found. Check the RR_WLD_2025_520 "
