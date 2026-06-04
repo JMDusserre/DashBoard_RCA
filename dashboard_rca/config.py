@@ -20,7 +20,6 @@ AVAILABLE_COLOR_SCALES = ["RdYlGn", "Viridis", "Cividis", "Plasma", "Turbo", "Bl
 
 INDEX_PREFIX = "Index_"
 DEFAULT_MAP_COLUMN = "Index_NTLsum"
-OVERALL_VULNERABILITY_INDEX = "Index_Vulnerab_Final"
 NO_DATA_COLOR = "#d3d3d3"
 
 CAR_BOUNDS = {
@@ -54,16 +53,6 @@ RISK_METRICS = [
     "Index_Diamond_ArtisanalMines",
     "Index_Conflicts",
     "Index_Absence_of_floods",
-]
-
-DESCRIPTIVE_METRICS = [
-    "Index_NTLsum",
-    "Index_NTLmean",
-    "Index_population",
-    "Index_BuiltUp",
-    "Index_share_NDVI",
-    "Index_Grasslands",
-    "Index_Boutiques",
 ]
 
 HUMAN_CENTRIC_METRICS = [

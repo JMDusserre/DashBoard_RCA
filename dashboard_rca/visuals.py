@@ -38,7 +38,6 @@ World Bank PRWP 11309 Alignment:
 from __future__ import annotations
 
 import plotly.express as px
-import plotly.graph_objects as go
 from plotly.graph_objs import Figure
 import mapclassify as mc
 

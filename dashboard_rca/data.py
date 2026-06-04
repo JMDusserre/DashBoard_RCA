@@ -21,23 +21,6 @@ import streamlit as st
 
 from .config import INDEX_PREFIX, HUMAN_CENTRIC_METRICS
 
-
-RAW_PROXY_COLUMNS = [
-    "NTLsum",
-    "NTLmean",
-    "population",
-    "BuiltUp",
-    "Water",
-    "share_forest",
-    "share_cropland",
-    "share_builtup",
-    "share_deforest",
-    "share_NDVI",
-    "Main_Mines",
-    "Diamond_ArtisanalMines",
-    "Boutiques",
-]
-
 NORMALIZED_PROXY_MAP = {
     "Index_NTLsum": "NTLsum",
     "Index_NTLmean": "NTLmean",
@@ -203,20 +186,6 @@ def get_prefecture_options(gdf: gpd.GeoDataFrame) -> list[str]:
 
     return []
 
-
-def get_year_options(gdf: gpd.GeoDataFrame) -> list[int]:
-    """Return the available years in ascending order.
-    
-    Filters NaN years (unmatched spatial features) and returns unique years.
-    Sorted for UI selectbox to show oldest data first.
-    
-    Args:
-        gdf: Merged GeoDataFrame from load_dashboard_data()
-    
-    Returns:
-        Sorted list of unique years (int) in ascending order.
-    """
-    return gdf["Year"].dropna().astype(int).sort_values().unique().tolist()
 
 
 def get_index_columns(gdf: gpd.GeoDataFrame) -> list[str]:
