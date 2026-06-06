@@ -109,7 +109,7 @@ UI_TEXTS = {
         "macro_indicators": "Macro-indicateurs pour : {}",
         "macro_caption": "Ces cartes de synthèse sont calculées à partir des couches de données actives de cet espace de travail.",
         "overall_vuln": "Score global de vulnérabilité",
-        "overall_caption": "Indicateur composite combinant l'accès aux infrastructures et l'exposition aux risques (0 = Risque Faible, 1 = Risque Élevé).",
+        "overall_caption": "Indicateur composite combinant l'accès aux infrastructures et l'exposition aux risques (0 = Risque Faible, 100 = Risque Élevé).",
         "territory_score": "Vulnérabilité du territoire",
         "geospatial_map": "Carte géospatiale avancée",
         "map_caption": "Cellules de 5×5 km colorées selon l'indicateur normalisé choisi. Le gris clair indique une absence de données.",
@@ -120,7 +120,7 @@ UI_TEXTS = {
         "select_cell": "Sélectionner l'ID d'une cellule à analyser (optionnel)",
         "location_context": "Contexte & Localisation",
         "radar_title": "Graphique radar de vulnérabilité à 5 dimensions",
-        "radar_caption": "Chaque dimension va de 0 (risque élevé) à 1 (sécurité élevée). Les données manquantes apparaissent à -0,1.",
+        "radar_caption": "Chaque dimension va de 0 (risque élevé) à 100 (sécurité élevée). Les données manquantes apparaissent en dessous de l'échelle.",
 
         # Options des menus
         "Strategic (Donors/PTF)": "Stratégique (Bailleurs / Partenaires)",
@@ -167,7 +167,7 @@ UI_TEXTS = {
         "macro_indicators": "Proxy-Based Macro Indicators: {}",
         "macro_caption": "These summary cards are computed from the active proxy layers bundled in this workspace.",
         "overall_vuln": "Overall Vulnerability Score",
-        "overall_caption": "Composite proxy index combining infrastructure access and risk exposure (0=Low Risk, 1=High Risk).",
+        "overall_caption": "Composite proxy index combining infrastructure access and risk exposure (0=Low Risk, 100=High Risk).",
         "territory_score": "Territory Vulnerability",
         "geospatial_map": "Advanced Geospatial Map",
         "map_caption": "5×5 km grid cells colored by the selected normalized proxy. Light gray indicates missing data.",
@@ -178,7 +178,7 @@ UI_TEXTS = {
         "select_cell": "Select a grid cell ID to analyze (optional)",
         "location_context": "Location & Context",
         "radar_title": "5-Dimensional Proxy Radar Chart",
-        "radar_caption": "Each dimension extends from 0 (high risk) to 1 (high safety). Missing data shown as -0.1.",
+        "radar_caption": "Each dimension extends from 0 (high risk) to 100 (high safety). Missing data is shown below the scale.",
 
         # Menu options
         "Strategic (Donors/PTF)": "Strategic (Donors/PTF)",

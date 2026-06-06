@@ -5,7 +5,7 @@ type casting, validation, and schema discovery.
 
 RR_WLD 2025-520 Data Reality:
     - Source: Base_CAF_AllIndexes_ForPlatform.csv (pre-normalized by data scientist).
-    - All Idx_* columns are already normalized [0, 1] — no further normalization needed.
+    - Raw Idx_* columns are normalized [0, 1] in the CSV; scaled to [0, 100] at load time.
     - NORMALIZED_PROXY_MAP renames Idx_* CSV columns to the application's Index_* convention.
     - String ID casting is critical: it prevents silent merge failures on float vs int.
     - ~68% of index values are NaN due to field insecurity preventing data collection
@@ -38,6 +38,15 @@ NORMALIZED_PROXY_MAP = {
 }
 
 
+def _scale_index_columns_to_hundred(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert normalized [0, 1] index columns to intuitive [0, 100] scores."""
+    result = frame.copy()
+    for column in result.columns:
+        if column.startswith(INDEX_PREFIX):
+            result[column] = pd.to_numeric(result[column], errors="coerce") * 100
+    return result
+
+
 def load_dashboard_data(
     csv_path: str,
     shp_path: str,
@@ -56,9 +65,9 @@ def load_dashboard_data(
       errors. We preserve NaN values throughout the pipeline (never drop, never impute)
       to keep the dashboard honest about field realities.
 
-    CRITICAL DESIGN DECISION - Column Rename Only (No Normalization):
-      Source data is already normalized [0, 1] by the data scientist. NORMALIZED_PROXY_MAP
-      is applied as a pure rename (Idx_* → Index_*) with no arithmetic transformation.
+    CRITICAL DESIGN DECISION - Column Rename + Score Scaling:
+      Source data is normalized [0, 1] by the data scientist. NORMALIZED_PROXY_MAP
+      renames Idx_* → Index_*, then values are multiplied by 100 for UI readability.
 
     Args:
         csv_path: Path to the AllIndexes CSV (pre-normalized tabular source data)
@@ -104,10 +113,11 @@ def load_dashboard_data(
         if year is not None:
             csv_frame = csv_frame[csv_frame["Year"].eq(year)].copy()
 
-    # Rename Idx_* to Index_* (pure rename, values are already normalized [0, 1]).
+    # Rename Idx_* to Index_*, then scale [0, 1] → [0, 100] for display.
     rename_idx = {src: dst for src, dst in NORMALIZED_PROXY_MAP.items() if src in csv_frame.columns}
     if rename_idx:
         csv_frame = csv_frame.rename(columns=rename_idx)
+    csv_frame = _scale_index_columns_to_hundred(csv_frame)
 
     # Left join keeps all spatial features; NaN for cells without CSV data.
     # validate="1:1" ensures no duplicate keys (data integrity check).

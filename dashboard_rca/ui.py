@@ -137,7 +137,7 @@ def _render_kpi_cards(metric_values: list[tuple[str, float | None]]) -> None:
     metric_columns = st.columns(3)
     for column, (metric_name, value) in zip(metric_columns, metric_values, strict=True):
         with column:
-            metric_text = "N/A" if pd.isna(value) else f"{float(value):.2f}"
+            metric_text = "N/A" if pd.isna(value) else f"{float(value):.1f} / 100"
             st.metric(txt(metric_name), metric_text)
 
 def _render_detail_panel(aggregated_gdf) -> None:
@@ -174,10 +174,8 @@ def main() -> None:
         if not available_years:
             st.error("No year data found.")
             st.stop()
-        if "timeline_year" not in st.session_state:
-            st.session_state.timeline_year = available_years[-1]
 
-        selected_year = int(st.session_state.timeline_year)
+        selected_year = available_years[-1]
         dashboard_gdf = _cached_load(str(CSV_PATH), str(SHP_PATH), selected_year)
     except Exception as exc:
         st.error(str(exc))
@@ -234,7 +232,7 @@ def main() -> None:
     
     if "Index_Vulnerab_Final" in aggregated_gdf.columns:
         vuln_score = aggregated_gdf["Index_Vulnerab_Final"].mean(skipna=True)
-        vuln_text = "N/A" if pd.isna(vuln_score) else f"{float(vuln_score):.2f}"
+        vuln_text = "N/A" if pd.isna(vuln_score) else f"{float(vuln_score):.1f} / 100"
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
             st.metric(txt("territory_score"), vuln_text)
@@ -249,17 +247,6 @@ def main() -> None:
             hover_columns=[selected_map_metric],
         )
     st.plotly_chart(choropleth_figure, width="stretch")
-    st.markdown(f"### {txt('timeline')}")
-    st.caption(txt("timeline_caption"))
-    if len(available_years) > 1:
-        st.select_slider(
-            "Year",
-            options=available_years,
-            key="timeline_year",
-            label_visibility="collapsed"
-        )
-    else:
-        st.caption(f"📅 {txt('Year')} : **{available_years[0]}**")
 
     _render_detail_panel(aggregated_gdf)
 

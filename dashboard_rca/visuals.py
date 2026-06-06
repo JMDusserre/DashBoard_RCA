@@ -134,7 +134,7 @@ def build_map(
 
     # Preserve missing values as a dedicated No Data category and exclude them from Jenks.
     raw_values = pd.to_numeric(plot_gdf[color_column], errors="coerce")
-    no_data_mask = raw_values.isna() | raw_values.eq(-0.01)
+    no_data_mask = raw_values.isna()
     valid_values = raw_values.loc[~no_data_mask].dropna()
 
     plot_gdf[plot_column] = "No Data"
@@ -160,10 +160,9 @@ def build_map(
     # Keep the raw metric available for color scale computation.
     plot_gdf[color_column] = raw_values
 
-    # Build a human-readable hover column: formatted value or "N/A" for missing data.
-    # NaN and the sentinel -0.01 both display as "N/A" to avoid showing "0.00" on gray cells.
+    # Build a human-readable hover column: formatted score or "N/A" for missing data.
     plot_gdf["__hover_metric__"] = raw_values.apply(
-        lambda v: "N/A" if (pd.isna(v) or v == -0.01) else f"{v:.2f}"
+        lambda v: "N/A" if pd.isna(v) else f"{v:.1f} / 100"
     )
 
     # Semantic routing: palette chosen automatically based on metric type.
@@ -299,12 +298,12 @@ def build_radar_chart(
       4. Water Access
       5. Education Access
       
-      Each dimension is normalized to [0, 1] where 1 = high safety/access,
+      Each dimension is scaled to [0, 100] where 100 = high safety/access,
       0 = high risk/no access. The radar visualization makes trade-offs visible:
       e.g., "High security but poor water access".
     
     DESIGN - NaN Handling:
-      Missing values (from field insecurity) are set to -0.1 (below 0) and
+      Missing values (from field insecurity) are set to -10 (below 0) and
       labeled "N/A" in hover text. This prevents fabrication while keeping
       the chart readable. Viewers can instantly see which dimensions lack data.
     
@@ -314,27 +313,26 @@ def build_radar_chart(
     Returns:
         Plotly Figure (scatterpolar) ready for st.plotly_chart()
     """
-    # Extract values for the 5 dimensions, using -0.1 for NaN (off-scale as "N/A")
+    # Extract values for the 5 dimensions, using -10 for NaN (off-scale as "N/A")
     values = []
     labels = []
     for column in DETAIL_COLUMNS:
         label = label_for_column(column)
         labels.append(label)
         numeric_value = safe_float(row.get(column, pd.NA))
-        
-        # RULE 2 (Radar Polarity): Invert risk metrics so high risk appears as low on the 0-1 scale
+
+        # Invert risk metrics so high risk appears as low on the 0-100 safety axis.
         if column in RISK_METRICS and numeric_value is not None:
-            numeric_value = 1.0 - numeric_value
-        
-        # Use -0.1 for NaN so it renders below zero on the radar, labeled as missing
-        values.append(numeric_value if numeric_value is not None else -0.1)
+            numeric_value = 100.0 - numeric_value
+
+        values.append(numeric_value if numeric_value is not None else -10.0)
 
     # Build radar trace with custom styling
     fig = px.line_polar(
         r=values,
         theta=labels,
         line_close=True,
-        title="Multidimensional Vulnerability Profile (0=High Risk, 1=High Safety)",
+        title="Multidimensional Vulnerability Profile (0=High Risk, 100=High Safety)",
     )
 
     # Update to filled radar (more readable than lines)
@@ -345,12 +343,12 @@ def build_radar_chart(
         marker_size=8,
     )
 
-    # Set radial axis to [0, 1] plus some padding for -0.1 markers
+    # Set radial axis to [0, 100] plus some padding for -10 markers
     fig.update_layout(
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[-0.2, 1.0],
+                range=[-20.0, 100.0],
                 tickfont=dict(size=10),
                 gridcolor="lightgray",
             ),
