@@ -37,6 +37,8 @@ World Bank PRWP 11309 Alignment:
 
 from __future__ import annotations
 
+import math
+
 import plotly.express as px
 from plotly.graph_objs import Figure
 import mapclassify as mc
@@ -54,23 +56,53 @@ from .config import (
 from .formatting import label_for_column, safe_float
 
 
+def _compute_viewport(gdf: gpd.GeoDataFrame) -> dict:
+    """Derive map center and zoom from the bounding box of the GDF geometries.
+
+    Reprojects to EPSG:4326 (safe no-op if already geographic) to guarantee
+    lat/lon output regardless of the source CRS. Uses a log₂ formula so that
+    each halving of the geographic extent increases zoom by 1 level, matching
+    the Plotly/Maplibre tile scheme. A 10 % margin keeps polygons away from
+    the very edge of the viewport.
+
+    Falls back to the CAR default centre (6.6 N, 20.9 E, zoom 4.8) if the
+    geometry is empty or reprojection fails.
+    """
+    try:
+        geo = gdf.geometry.dropna()
+        if geo.empty:
+            raise ValueError("empty geometry")
+        bounds = geo.to_crs("EPSG:4326").total_bounds  # [minlon, minlat, maxlon, maxlat]
+        minlon, minlat, maxlon, maxlat = bounds
+        center = {"lat": (minlat + maxlat) / 2.0, "lon": (minlon + maxlon) / 2.0}
+        max_range = max(maxlon - minlon, maxlat - minlat)
+        zoom = math.log2(360.0 / (max_range * 1.1)) if max_range > 0 else 10.0
+        zoom = max(1.0, min(15.0, zoom))
+        return {"center": center, "zoom": round(zoom, 2)}
+    except Exception:
+        return {"center": {"lat": 6.6, "lon": 20.9}, "zoom": 4.8}
+
+
 def build_map(
     filtered_gdf: gpd.GeoDataFrame,
     color_column: str,
     hover_columns: list[str] | None = None,
-    color_scale: str | None = None,
 ) -> Figure:
     """Create a Jenks-classified choropleth map for the currently selected territory.
 
     Missing values are preserved as a distinct "No Data" category and excluded
     from Jenks classification so they do not distort the class break calculation.
+    The color palette is determined automatically via semantic routing based on
+    the metric type (RISK_METRICS → Reds, CAPACITY_METRICS → Viridis, etc.).
+
+    The viewport is set via `fitbounds="geojson"` so Plotly computes the optimal
+    zoom and center automatically from the visible polygons — works identically
+    for full-country and single-territory views without any manual calculation.
 
     Args:
         filtered_gdf: GeoDataFrame filtered to specific prefecture or all CAR
-        color_column: Index column to encode (e.g., "Index_Absence_of_conflicts")
+        color_column: Index column to encode (e.g., "Index_conflicts")
         hover_columns: Optional list of columns to display in hover tooltip
-        color_scale: Optional color palette name (e.g., "RdYlGn", "Viridis").
-            Used as the source palette for the Jenks class colors.
 
     Returns:
         Plotly Figure (choropleth_map) ready for st.plotly_chart()
@@ -125,23 +157,24 @@ def build_map(
     else:
         class_labels = []
 
-    # Keep the raw metric available for hover even though color is categorical.
+    # Keep the raw metric available for color scale computation.
     plot_gdf[color_column] = raw_values
 
-    # Determine the correct color scale: use user selection or semantic routing
-    if color_scale is not None:
-        # User selected a specific palette from sidebar
-        chosen_scale = color_scale
+    # Build a human-readable hover column: formatted value or "N/A" for missing data.
+    # NaN and the sentinel -0.01 both display as "N/A" to avoid showing "0.00" on gray cells.
+    plot_gdf["__hover_metric__"] = raw_values.apply(
+        lambda v: "N/A" if (pd.isna(v) or v == -0.01) else f"{v:.2f}"
+    )
+
+    # Semantic routing: palette chosen automatically based on metric type.
+    if color_column == "Index_Vulnerab_Final":
+        chosen_scale = "YlOrRd"   # Overall vulnerability: warm gradient
+    elif color_column in RISK_METRICS:
+        chosen_scale = "Reds"     # Risk/negative metrics: danger gradient
+    elif color_column in CAPACITY_METRICS:
+        chosen_scale = "Viridis"  # Capacity/access metrics: scientific gradient
     else:
-        # Semantic routing based on metric type (RULE 5: Semantic Colors)
-        if color_column == "Index_Vulnerab_Final":
-            chosen_scale = "YlOrRd"  # Vulnerability standard
-        elif color_column in RISK_METRICS:
-            chosen_scale = "Reds"  # Danger/Risk standard
-        elif color_column in CAPACITY_METRICS:
-            chosen_scale = "Viridis"  # Scientific capacity standard
-        else:
-            chosen_scale = "Blues"  # Neutral descriptive standard
+        chosen_scale = "Blues"    # Neutral/descriptive metrics: neutral gradient
 
     # Build a discrete palette for Jenks classes from the selected scale.
     if class_labels:
@@ -162,11 +195,13 @@ def build_map(
     )
 
     # Build native Plotly hover dictionaries so labels stay aligned with the data slice.
-    hover_data_dict: dict[str, object] = {plot_column: False}
+    # __hover_metric__ carries the pre-formatted string (value or "N/A") for the tooltip;
+    # the raw color_column is excluded from hover to prevent a duplicate "0.00" entry.
+    hover_data_dict: dict[str, object] = {plot_column: False, color_column: False}
     labels_dict: dict[str, str] = {plot_column: label_for_column(color_column)}
 
-    hover_data_dict[color_column] = ":.2f"
-    labels_dict[color_column] = f"🎯 {label_for_column(color_column)}"
+    hover_data_dict["__hover_metric__"] = True
+    labels_dict["__hover_metric__"] = f"🎯 {label_for_column(color_column)}"
 
     if "Year" in plot_gdf.columns:
         hover_data_dict["Year"] = True
@@ -194,8 +229,6 @@ def build_map(
         hover_data=hover_data_dict,
         labels=labels_dict,
         opacity=0.78,  # Slightly higher opacity reduces visible seams between cells
-        zoom=4.8,      # Zoom shows full CAR at startup
-        center={"lat": 6.6, "lon": 20.9},  # Hardcoded to avoid CRS warnings
         map_style="carto-positron",  # Labeled basemap provides context
         height=700,
     )
@@ -244,8 +277,11 @@ def build_map(
             trace.marker.line.width = 0
             trace.marker.line.color = "rgba(0,0,0,0)"
     
-    # Lock viewport to CAR bounds to prevent zoom-out distraction
-    fig.update_mapboxes(bounds=CAR_BOUNDS, center={"lat": 6.6, "lon": 20.9})
+    # Fit viewport to the visible polygons: center and zoom derived from the
+    # bounding box of plot_gdf, so both full-CAR and territory views are handled
+    # automatically without any caller-side computation.
+    viewport = _compute_viewport(plot_gdf)
+    fig.update_layout(map=dict(center=viewport["center"], zoom=viewport["zoom"]))
 
     return fig
 

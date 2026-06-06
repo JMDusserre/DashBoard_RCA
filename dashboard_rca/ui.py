@@ -11,8 +11,6 @@ from .config import (
     HUMAN_CENTRIC_METRICS,
     CSV_PATH,
     DEFAULT_MAP_COLUMN,
-    DEFAULT_MAP_SCALE,
-    AVAILABLE_COLOR_SCALES,
     SHP_PATH,
     UI_TEXTS,
 )
@@ -49,7 +47,7 @@ def select_metric(label: str, options: list[str], default_value: str) -> str:
         format_func=txt, # On utilise la traduction !
     )
 
-def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, str, str, str]:
+def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, str, str]:
     with st.sidebar:
         # 🌐 LANGUE
         st.subheader("🌐 Langue / Language")
@@ -96,13 +94,7 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
             default_value=DEFAULT_MAP_COLUMN,
         )
         
-        selected_color_scale = st.selectbox(
-            txt("palette"),
-            options=AVAILABLE_COLOR_SCALES,
-            index=AVAILABLE_COLOR_SCALES.index(DEFAULT_MAP_SCALE),
-        )
-        
-    return persona, territory_choice, resolution_option, selected_map_metric, selected_color_scale
+    return persona, territory_choice, resolution_option, selected_map_metric
 
 def _compute_kpi_values(gdf, persona: str, pop_col: str | None = None) -> list[tuple[str, float | None]]:
     persona_metrics = PERSONA_KPI_DEFINITIONS[persona]
@@ -178,9 +170,12 @@ def main() -> None:
         st.error(str(exc))
         st.stop()
 
-    index_columns = get_index_columns(dashboard_gdf)
-    persona, territory_choice, resolution_option, selected_map_metric, selected_color_scale = _build_sidebar(
-        dashboard_gdf, index_columns
+    # Collect ALL Index_* columns from the full (unfiltered) GDF so the sidebar
+    # selectbox always proposes every indicator regardless of the current territory
+    # or resolution filter. Never reassign this variable afterwards.
+    all_index_columns = get_index_columns(dashboard_gdf)
+    persona, territory_choice, resolution_option, selected_map_metric = _build_sidebar(
+        dashboard_gdf, all_index_columns
     )
 
     if territory_choice == "All territories":
@@ -190,12 +185,19 @@ def main() -> None:
         filtered_gdf = dashboard_gdf[dashboard_gdf["Prefecture"].astype(str) == territory_choice].copy()
         display_name = territory_choice
 
-    aggregated_gdf = aggregate_by_resolution(filtered_gdf, resolution_option)
+    # Grid resolution: use the territory-filtered GDF directly — no dissolve needed.
+    # Prefecture/Sous-prefecture: aggregate (dissolve + mean) by administrative unit.
+    if resolution_option.startswith("Secteur"):
+        aggregated_gdf = filtered_gdf.copy()
+    else:
+        aggregated_gdf = aggregate_by_resolution(filtered_gdf, resolution_option)
     aggregated_gdf = compute_overall_vulnerability(aggregated_gdf)
 
-    index_columns = get_index_columns(aggregated_gdf)
-    if selected_map_metric not in index_columns and index_columns:
-        selected_map_metric = index_columns[0]
+    # Guard: if the metric selected in sidebar isn't in the current aggregation
+    # (e.g. column dropped after dissolve), fall back to the first available.
+    aggregated_index_columns = get_index_columns(aggregated_gdf)
+    if selected_map_metric not in aggregated_index_columns and aggregated_index_columns:
+        selected_map_metric = aggregated_index_columns[0]
 
     # --- TITRES ---
     st.title(txt("title"))
@@ -232,17 +234,19 @@ def main() -> None:
             aggregated_gdf,
             selected_map_metric,
             hover_columns=[selected_map_metric],
-            color_scale=selected_color_scale,
         )
     st.plotly_chart(choropleth_figure, width="stretch")
     st.markdown(f"### {txt('timeline')}")
     st.caption(txt("timeline_caption"))
-    st.select_slider(
-        "Year",
-        options=available_years,
-        key="timeline_year",
-        label_visibility="collapsed"
-    )
+    if len(available_years) > 1:
+        st.select_slider(
+            "Year",
+            options=available_years,
+            key="timeline_year",
+            label_visibility="collapsed"
+        )
+    else:
+        st.caption(f"📅 {txt('Year')} : **{available_years[0]}**")
 
     _render_detail_panel(aggregated_gdf)
 

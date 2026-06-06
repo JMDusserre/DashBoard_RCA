@@ -1,15 +1,15 @@
 """Data loading and schema helpers for the dashboard.
 
 This module handles all data pipeline operations: CSV/shapefile loading,
-type casting, validation, and schema discovery. The critical constraint is
-NaN handling: ~47% of indices are missing because field insecurity prevented
-data collection in those grid cells. This is a feature (reflects reality),
-not a bug. We preserve NaN patterns throughout to ensure honest reporting.
+type casting, validation, and schema discovery.
 
 RR_WLD 2025-520 Data Reality:
-    - The active package contains the raw CAR grid source table plus the 5 km grid.
-    - The dashboard derives normalized proxy layers from the available raw columns.
+    - Source: Base_CAF_AllIndexes_ForPlatform.csv (pre-normalized by data scientist).
+    - All Idx_* columns are already normalized [0, 1] — no further normalization needed.
+    - NORMALIZED_PROXY_MAP renames Idx_* CSV columns to the application's Index_* convention.
     - String ID casting is critical: it prevents silent merge failures on float vs int.
+    - ~68% of index values are NaN due to field insecurity preventing data collection
+      in those grid cells. This is a feature, not a bug. NaN is preserved throughout.
 """
 
 from __future__ import annotations
@@ -17,65 +17,25 @@ from __future__ import annotations
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-import streamlit as st
 
 from .config import INDEX_PREFIX, HUMAN_CENTRIC_METRICS
 
+# Maps source CSV Idx_* column names to the application's Index_* column names.
+# All source values are pre-normalized [0, 1] by the data scientist.
+# Key = CSV column name, Value = application column name.
 NORMALIZED_PROXY_MAP = {
-    "Index_NTLsum": "NTLsum",
-    "Index_NTLmean": "NTLmean",
-    "Index_population": "population",
-    "Index_BuiltUp": "BuiltUp",
-    "Index_Water": "Water",
-    "Index_share_forest": "share_forest",
-    "Index_share_cropland": "share_cropland",
-    "Index_share_builtup": "share_builtup",
-    "Index_share_deforest": "share_deforest",
-    "Index_share_NDVI": "share_NDVI",
-    "Index_Main_Mines": "Main_Mines",
-    "Index_Diamond_ArtisanalMines": "Diamond_ArtisanalMines",
-    "Index_Boutiques": "Boutiques",
+    "Idx_GDP":            "Index_GDP",
+    "Idx_GDP_prim":       "Index_GDP_prim",
+    "Idx_GDP_sec_ter":    "Index_GDP_sec_ter",
+    "Idx_educ_prim":      "Index_educ_prim",
+    "Idx_health":         "Index_health",
+    "Idx_water_access":   "Index_water_access",
+    "Idx_Vulnerab_Final": "Index_Vulnerab_Final",
+    "Idx_floods":         "Index_floods",
+    "Idx_conflicts":      "Index_conflicts",
+    "Idx_Infrastructure": "Index_Infrastructure",
+    "Idx_ExpoRisk":       "Index_ExpoRisk",
 }
-
-
-def _normalize_group(group: pd.Series) -> pd.Series:
-    """Normalize a numeric series to the [0, 1] interval.
-
-    The raw RR_WLD package contains mixed-scale variables (counts, ratios,
-    and sums). Normalizing them makes the dashboard comparable across metrics.
-    When all values are identical, we return 0.0 instead of dividing by zero.
-    """
-    numeric_group = pd.to_numeric(group, errors="coerce")
-    minimum = numeric_group.min(skipna=True)
-    maximum = numeric_group.max(skipna=True)
-
-    if pd.isna(minimum) or pd.isna(maximum) or maximum == minimum:
-        return pd.Series([np.nan] * len(group), index=group.index, dtype="float64")
-
-    return (numeric_group - minimum) / (maximum - minimum)
-
-
-def _add_proxy_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add normalized proxy columns that drive the Streamlit dashboard.
-
-    We keep the raw variables intact and create `Index_*` proxy columns so the
-    rest of the application can remain label-driven and easy to extend.
-    Normalization is performed within each year when the `Year` column exists.
-    """
-    result = frame.copy()
-
-    if "Year" in result.columns:
-        for target_column, source_column in NORMALIZED_PROXY_MAP.items():
-            if source_column not in result.columns:
-                continue
-            result[target_column] = result.groupby("Year", dropna=False)[source_column].transform(_normalize_group)
-    else:
-        for target_column, source_column in NORMALIZED_PROXY_MAP.items():
-            if source_column not in result.columns:
-                continue
-            result[target_column] = _normalize_group(result[source_column])
-
-    return result
 
 
 def load_dashboard_data(
@@ -83,52 +43,54 @@ def load_dashboard_data(
     shp_path: str,
     year: int | None = None,
 ) -> gpd.GeoDataFrame:
-    """Load, normalize, and merge CSV and shapefile into a GeoDataFrame.
-    
+    """Load and merge the pre-normalized CSV and shapefile into a GeoDataFrame.
+
     CRITICAL DESIGN DECISION - String ID Casting:
       CSV `id` column is int; shapefile `id` column is float. Numeric joins on
       mixed float/int types fail silently, producing incorrect merge results.
       We explicitly cast both to str BEFORE merging to catch mismatches early
       and ensure 1:1 validation passes with correct row counts.
-    
+
     CRITICAL DESIGN DECISION - NaN Handling:
-      ~47% of access/conflict indices are NaN due to field insecurity, not data entry
+      ~68% of access/conflict indices are NaN due to field insecurity, not data entry
       errors. We preserve NaN values throughout the pipeline (never drop, never impute)
-      to keep the dashboard honest about field realities. Missing data is explained
-      in UI as "unreachable due to field insecurity", not "unknown".
-    
+      to keep the dashboard honest about field realities.
+
+    CRITICAL DESIGN DECISION - Column Rename Only (No Normalization):
+      Source data is already normalized [0, 1] by the data scientist. NORMALIZED_PROXY_MAP
+      is applied as a pure rename (Idx_* → Index_*) with no arithmetic transformation.
+
     Args:
-        csv_path: Path to the RR_WLD panel CSV (tabular source data)
+        csv_path: Path to the AllIndexes CSV (pre-normalized tabular source data)
         shp_path: Path to the 5x5 km grid shapefile
-        year: Optional year filter. The RR_WLD CSV is a panel, so filtering
-            before the merge keeps the join one-to-one.
-    
+        year: Optional year filter. The CSV is a panel; filtering before the merge
+            keeps the join one-to-one.
+
     Returns:
         GeoDataFrame with spatial geometries and left-joined CSV fields.
         Rows without CSV data have NaN for all index columns.
-        
+
     Raises:
         FileNotFoundError: If CSV or SHP files are missing.
     """
     try:
-        csv_frame = pd.read_csv(csv_path, na_values=["NA", "NaN", ""])
+        # index_col=0 drops the unnamed row-index column present in the source CSV.
+        csv_frame = pd.read_csv(csv_path, index_col=0, na_values=["NA", "NaN", ""])
         spatial_frame = gpd.read_file(shp_path)
         spatial_frame['geometry'] = spatial_frame['geometry'].simplify(tolerance=0.005, preserve_topology=True)
     except FileNotFoundError as exc:
         raise FileNotFoundError(
             "The dashboard data files could not be found. Check the RR_WLD_2025_520 "
-            "Inputs/Base_CAF_v1.csv and Inputs/GIS/Grid_5km_CFA_v4.shp files."
+            "Inputs/Base_CAF_AllIndexes_ForPlatform.csv and Inputs/GIS/Grid_5km_CFA_v4.shp files."
         ) from exc
 
     # DESIGN: Cast id to string BEFORE merge to prevent silent float vs int join failure.
-    # This ensures validate="1:1" will reliably catch any key mismatches.
     csv_frame["id"] = csv_frame["id"].astype(str)
     spatial_frame["id"] = spatial_frame["id"].apply(
         lambda value: str(int(value)) if pd.notna(value) else np.nan
     )
 
-    # The RR_WLD package uses raw territorial names; rename them into the dashboard
-    # vocabulary so the UI can keep using "Prefecture" and "Sous-prefecture".
+    # Rename administrative columns to dashboard vocabulary.
     rename_map: dict[str, str] = {}
     if "Prefecture" not in csv_frame.columns and "NEW_NAME_1" in csv_frame.columns:
         rename_map["NEW_NAME_1"] = "Prefecture"
@@ -142,9 +104,12 @@ def load_dashboard_data(
         if year is not None:
             csv_frame = csv_frame[csv_frame["Year"].eq(year)].copy()
 
-    csv_frame = _add_proxy_columns(csv_frame)
+    # Rename Idx_* to Index_* (pure rename, values are already normalized [0, 1]).
+    rename_idx = {src: dst for src, dst in NORMALIZED_PROXY_MAP.items() if src in csv_frame.columns}
+    if rename_idx:
+        csv_frame = csv_frame.rename(columns=rename_idx)
 
-    # Left join keeps all 20,817 spatial features; NaN for cells without CSV data.
+    # Left join keeps all spatial features; NaN for cells without CSV data.
     # validate="1:1" ensures no duplicate keys (data integrity check).
     merged = spatial_frame.merge(csv_frame, on="id", how="left", validate="1:1")
 
@@ -159,9 +124,7 @@ def load_dashboard_data(
 def get_csv_year_options(csv_path: str) -> list[int]:
     """Read the raw CSV and return available years before the spatial merge.
 
-    The RR_WLD panel table stores one row per grid cell and year, so the year
-    selector must be populated before we merge against the shapefile. Reading
-    only the `Year` column keeps this cheap and avoids loading the full table twice.
+    Reads only the `Year` column to keep this cheap and avoid loading the full table twice.
     """
     csv_frame = pd.read_csv(csv_path, usecols=["Year"], na_values=["NA", "NaN", ""])
     return pd.to_numeric(csv_frame["Year"], errors="coerce").dropna().astype(int).sort_values().unique().tolist()
@@ -169,13 +132,13 @@ def get_csv_year_options(csv_path: str) -> list[int]:
 
 def get_prefecture_options(gdf: gpd.GeoDataFrame) -> list[str]:
     """Return a clean, deterministic list of prefecture names.
-    
+
     Filters out NaN (some grid cells lack prefecture assignment) and sorts
     alphabetically for consistent UI presentation across app restarts.
-    
+
     Args:
         gdf: Merged GeoDataFrame from load_dashboard_data()
-    
+
     Returns:
         Sorted list of unique prefecture names (str).
     """
@@ -188,16 +151,15 @@ def get_prefecture_options(gdf: gpd.GeoDataFrame) -> list[str]:
     return []
 
 
-
 def get_index_columns(gdf: gpd.GeoDataFrame) -> list[str]:
     """Find all normalized index columns from the merged dataset.
-    
-    DESIGN: Dynamic discovery allows new indices to be added to Sample_RCA.csv
+
+    DESIGN: Dynamic discovery allows new indices to be added to the source CSV
     without code changes. This is future-proof for World Bank PRWP 11309 updates.
-    
+
     Args:
         gdf: Merged GeoDataFrame from load_dashboard_data()
-    
+
     Returns:
         List of all columns starting with INDEX_PREFIX (e.g., "Index_GDP").
     """
@@ -209,75 +171,32 @@ def get_index_columns(gdf: gpd.GeoDataFrame) -> list[str]:
 
 
 def compute_overall_vulnerability(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Compute an active-data proxy for overall vulnerability.
+    """Pass-through: Index_Vulnerab_Final is pre-computed in the source CSV.
 
-    The workspace does not include the archived official PRWP component layers,
-    so this function builds a transparent proxy index from the normalized active
-    `Index_*` layers that are available in the bundle.
-
-    The proxy is scaled so that higher values mean higher vulnerability.
+    The data scientist (Vincent) provides a fully pre-normalized Idx_Vulnerab_Final
+    column, which is renamed to Index_Vulnerab_Final during load_dashboard_data().
+    No recomputation is performed here.
     """
-    result = gdf.copy()
-
-    component_groups = {
-        # Lower access or lower activity implies higher vulnerability, so these are inverted.
-        "access_proxy": [
-            "Index_NTLsum",
-            "Index_NTLmean",
-            "Index_Water",
-            "Index_BuiltUp",
-            "Index_share_builtup",
-            "Index_share_cropland",
-        ],
-        # Higher pressure/exposure implies higher vulnerability, so these are used directly.
-        "pressure_proxy": [
-            "Index_population",
-            "Index_Deforest",
-            "Index_Main_Mines",
-            "Index_Diamond_ArtisanalMines",
-            "Index_Boutiques",
-        ],
-    }
-
-    access_values: list[pd.Series] = []
-    for column in component_groups["access_proxy"]:
-        if column in result.columns:
-            access_values.append(1 - pd.to_numeric(result[column], errors="coerce"))
-
-    pressure_values: list[pd.Series] = []
-    for column in component_groups["pressure_proxy"]:
-        if column in result.columns:
-            pressure_values.append(pd.to_numeric(result[column], errors="coerce"))
-
-    all_components = access_values + pressure_values
-    if not all_components:
-        result["Index_Vulnerab_Final"] = np.nan
-        return result
-
-    component_frame = pd.concat(all_components, axis=1)
-    result["Index_Vulnerab_Final"] = component_frame.mean(axis=1, skipna=True)
-
-    return result
+    return gdf
 
 
 def _resolve_grouping_column(gdf: gpd.GeoDataFrame, resolution: str) -> str | None:
     """Resolve the grouping column based on resolution string.
-    
+
     Args:
         gdf: GeoDataFrame to check for available columns
-        resolution: Resolution option (e.g., "Prefecture", "Sous-prefecture", "City")
-    
+        resolution: Resolution option (e.g., "Prefecture", "Sous-prefecture")
+
     Returns:
-        Column name or None if not found or Grid cell resolution selected.
+        Column name or None if not found or grid-cell resolution selected.
     """
-    if resolution.startswith("Grid Cell"):
+    if resolution.startswith("Grid Cell") or resolution.startswith("Secteur"):
         return None
     if resolution.startswith("Prefecture"):
         return "Prefecture" if "Prefecture" in gdf.columns else None
     elif resolution.startswith("Sous-prefecture"):
         return "Sous-prefecture" if "Sous-prefecture" in gdf.columns else None
-    
-    
+
     return None
 
 
@@ -288,21 +207,21 @@ def _compute_numeric_aggregations(
     pop_col: str | None = None,
 ) -> pd.DataFrame:
     """Compute numeric aggregations with population masking for human-centric metrics.
-    
+
     Args:
         working_gdf: GeoDataFrame to aggregate
         group_col: Column to group by
         numeric_columns: List of numeric columns to aggregate
         pop_col: Optional population column for masking human-centric metrics
-    
+
     Returns:
         DataFrame with aggregated numeric values, respecting population mask.
     """
     aggregated_values = []
-    
+
     for group_key, group in working_gdf.groupby(group_col, dropna=False):
         row = {group_col: group_key}
-        
+
         for col in numeric_columns:
             try:
                 if col in HUMAN_CENTRIC_METRICS and pop_col is not None:
@@ -316,66 +235,61 @@ def _compute_numeric_aggregations(
                     val = pd.to_numeric(group[col], errors="coerce").mean(skipna=True)
             except Exception:
                 val = np.nan
-            
+
             row[col] = val
-        
+
         aggregated_values.append(row)
-    
+
     return pd.DataFrame(aggregated_values)
 
 
-@st.cache_data
-def aggregate_by_resolution(_gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
+def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
     """Aggregate the GeoDataFrame to the selected spatial resolution.
 
+    NOTE: @st.cache_data is intentionally NOT used here. The cache key would be
+    built only from `resolution` (GeoDataFrames are unhashable), causing stale data
+    to be returned when the territory filter changes between calls. The upstream
+    `_cached_load` already caches the expensive data-loading step.
+
     Args:
-        _gdf: input GeoDataFrame at grid-cell resolution
-            (leading underscore prevents Streamlit from hashing this unhashable type)
+        gdf: input GeoDataFrame at grid-cell resolution, already filtered by territory
         resolution: one of the human-facing options defined in config.SPATIAL_RESOLUTIONS
 
     Returns:
         Aggregated GeoDataFrame where geometries are dissolved by the chosen
         administrative unit and numeric metrics are averaged (mean).
+        For grid-cell resolution, returns gdf unchanged (caller handles this case).
     """
-    gdf = _gdf.copy()
+    gdf = gdf.copy()
 
-    # Resolve grouping column based on resolution
     group_col = _resolve_grouping_column(gdf, resolution)
-    
+
     if group_col is None:
         return gdf
 
-    # Prepare CRS for geometry operations
     target_crs = gdf.estimate_utm_crs() if gdf.crs and gdf.crs.is_geographic else gdf.crs
     working_gdf = gdf.to_crs(target_crs) if target_crs and target_crs != gdf.crs else gdf.copy()
     buffer_distance = 10.0
     working_gdf[working_gdf.geometry.name] = working_gdf.geometry.buffer(buffer_distance)
 
-    # Compute numeric aggregations with population masking
-    numeric_columns = [c for c in working_gdf.columns if c.startswith("Index_") or c in ["population", "NTLsum"]]
-    pop_col = "population" if "population" in working_gdf.columns else (
-        "Index_population" if "Index_population" in working_gdf.columns else None
-    )
-    
+    numeric_columns = [c for c in working_gdf.columns if c.startswith(INDEX_PREFIX)]
+    pop_col: str | None = None
+
     numeric_df = _compute_numeric_aggregations(working_gdf, group_col, numeric_columns, pop_col)
 
-    # Force cast to float to prevent 'object' dtype breaking Plotly continuous scales
     for col in numeric_columns:
         if col in numeric_df.columns:
             numeric_df[col] = pd.to_numeric(numeric_df[col], errors="coerce")
 
-    # Merge with dissolved geometries
     dissolved = working_gdf.dissolve(by=group_col)
     dissolved = dissolved.reset_index()
-    
-    # SOLUTION: Drop old numeric columns from dissolved to prevent _x and _y suffix collision
+
     cols_to_drop = [c for c in numeric_columns if c in dissolved.columns and c != group_col]
     dissolved = dissolved.drop(columns=cols_to_drop)
 
     dissolved[dissolved.geometry.name] = dissolved.geometry.buffer(-buffer_distance)
     merged = dissolved.merge(numeric_df, on=group_col, how="left")
 
-    # Finalize CRS and geometry
     if target_crs and gdf.crs and target_crs != gdf.crs:
         merged = merged.to_crs(gdf.crs)
     if "geometry" in merged.columns:
@@ -383,5 +297,3 @@ def aggregate_by_resolution(_gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoD
     merged = gpd.GeoDataFrame(merged, geometry="geometry", crs=gdf.crs)
 
     return merged
-
-
