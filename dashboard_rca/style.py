@@ -3,39 +3,42 @@ import streamlit as st
 def inject_custom_css():
     st.markdown("""
     <style>
-    /* 1. Largeur sidebar */
-    [data-testid="stSidebar"] {
-        width: 250px !important; 
+    /* ── SIDEBAR : padding du conteneur racine ──────────────────────────── */
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
     }
 
-    /* 2. Suppression de l'espace entre le bouton de réduction et le reste */
-    [data-testid="stSidebar"] section > div {
-        padding-top: 0px !important; /* Enlève le padding interne de la section */
+    /* ── SIDEBAR : espacement vertical entre blocs ──────────────────────── */
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.5rem !important;
     }
 
-    /* 3. Cible spécifiquement le bloc du bouton de langue pour réduire son espace */
-    [data-testid="stSidebar"] div[data-testid="stRadio"] {
-        margin-bottom: 0px !important;
-        padding-bottom: 0px !important;
+    /* ── SIDEBAR : radio et selectbox — juste supprimer le surplus bas ──── */
+    [data-testid="stSidebar"] .stRadio,
+    [data-testid="stSidebar"] .stSelectbox {
+        margin-bottom: 0.15rem !important;
     }
 
-    /* 4. Titres : on remonte tout */
-    [data-testid="stSidebar"] h2, 
-    [data-testid="stSidebar"] h3 {
-        margin-top: 2px !important; /* Réduit l'espace au-dessus du titre */
-        margin-bottom: 2px !important;
+    /* ── SIDEBAR : titres de section (markdown **...**) ─────────────────── */
+    [data-testid="stSidebar"] strong {
         font-size: 0.85rem !important;
+        color: #555 !important;
     }
 
-    /* 5. Densité générale */
-    [data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
-        gap: 0.1rem !important;
+    /* ── SIDEBAR : séparateurs hr inline ────────────────────────────────── */
+    [data-testid="stSidebar"] hr {
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+        border-color: #e0e0e0 !important;
     }
-    
+
+    /* ── SIDEBAR : police générale légèrement réduite ───────────────────── */
     [data-testid="stSidebar"] * {
-        font-size: 0.8rem !important;
+        font-size: 0.9rem !important;
     }
-    
+
+    /* ── CONTENU PRINCIPAL ───────────────────────────────────────────────── */
     .block-container {
         padding-top: 1rem !important;
         max-width: 95% !important;

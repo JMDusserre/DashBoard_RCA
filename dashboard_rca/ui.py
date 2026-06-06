@@ -47,53 +47,66 @@ def select_metric(label: str, options: list[str], default_value: str) -> str:
         format_func=txt, # On utilise la traduction !
     )
 
+def _sidebar_hr():
+    """Thin separator that bypasses Streamlit's padded st.divider()."""
+    st.markdown(
+        "<hr style='margin:0.35rem 0; border:none; border-top:1px solid #e0e0e0'>",
+        unsafe_allow_html=True,
+    )
+
+def _sidebar_section(label: str) -> None:
+    """Compact uppercase section header replacing st.subheader."""
+    st.markdown(f"**{label}**", unsafe_allow_html=False)
+
 def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, str, str]:
     with st.sidebar:
-        # 🌐 LANGUE
-        st.subheader("🌐 Langue / Language")
+        # 🌐 LANGUE — label inline du radio, horizontal
         st.session_state.lang = st.radio(
-            "Langue", options=["FR", "EN"], horizontal=True, label_visibility="collapsed"
+            "🌐 Langue / Language",
+            options=["FR", "EN"],
+            horizontal=True,
         )
-        st.divider()
+
+        _sidebar_hr()
 
         # 👤 PROFIL
-        st.subheader(txt("user_profile"))
+        _sidebar_section(txt("user_profile"))
         persona = st.radio(
-            "Role", 
-            options=PERSONA_OPTIONS, 
-            index=0, 
+            "Role",
+            options=PERSONA_OPTIONS,
+            index=0,
             format_func=txt,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
         )
-        st.divider()
 
-        # 🗺️ FILTRES
-        st.subheader(txt("spatial_filters"))
+        _sidebar_hr()
+
+        # 🗺️ FILTRES SPATIAUX
+        _sidebar_section(txt("spatial_filters"))
         prefecture_options = get_prefecture_options(dashboard_gdf)
-        
         territory_choice = st.selectbox(
             txt("select_territory"),
             options=["All territories"] + prefecture_options,
             index=0,
-            format_func=lambda x: txt("all_territories") if x == "All territories" else x
+            format_func=lambda x: txt("all_territories") if x == "All territories" else x,
         )
-
         resolution_option = st.selectbox(
             txt("spatial_res"),
             options=SPATIAL_RESOLUTIONS,
             index=0,
-            format_func=txt
+            format_func=txt,
         )
-        st.divider()
 
-        # 📊 VIZ
-        st.subheader(txt("data_vis"))
+        _sidebar_hr()
+
+        # 📊 VISUALISATION
+        _sidebar_section(txt("data_vis"))
         selected_map_metric = select_metric(
             txt("highlight_index"),
             options=index_columns,
             default_value=DEFAULT_MAP_COLUMN,
         )
-        
+
     return persona, territory_choice, resolution_option, selected_map_metric
 
 def _compute_kpi_values(gdf, persona: str, pop_col: str | None = None) -> list[tuple[str, float | None]]:
