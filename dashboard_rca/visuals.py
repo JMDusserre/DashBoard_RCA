@@ -1,38 +1,43 @@
 """Map rendering and detail visualization utilities for the dashboard.
 
-This module handles all Plotly figure generation: the choropleth map for
-geospatial analysis and the radar chart for multidimensional profiling.
+DESIGN DECISIONS:
 
-DESIGN DECISIONS EXPLAINED:
-  
-  1. Sentinel Value (-0.01) for Missing Data:
-     ~47% of cells have NaN indices due to field insecurity. Using -0.01 as a
-     sentinel allows those cells to render as a distinct neutral gray color,
-     avoiding fabricated data or blank spaces that confuse decision-makers.
-  
-  2. Custom Color Scale with Neutral Base:
-     The first part of the color scale maps [-0.01, 0.009] to neutral gray (#f0f0f0).
-     This ensures missing-data cells are visually distinct from low-risk cells (0.0 = red).
-     The scale then shifts to the base Plotly colorscale for [0.01, 1.0].
-  
-  3. Hardcoded Map Center (6.6, 20.9):
-     We hardcode rather than compute dynamically because:
-     - Avoids CRS projection warnings in Streamlit
-     - Ensures consistent startup experience
-     - Prevents zoom-out distraction for decision-makers
-  
-  4. Opacity 0.65:
-     Allows subtle visibility of labeled basemap (city names, roads) while
-     keeping colored cells readable. Full opacity (1.0) hides context.
-  
-  5. Cell Borders Disabled:
-      The grid is already visible from the polygon geometry, so the choropleth
-      stroke is kept transparent to avoid white seams between adjacent cells.
+  1. Jenks Natural Breaks classification:
+     Values are split into up to 5 classes using mapclassify.NaturalBreaks.
+     NaN cells (~68% of the grid, caused by field insecurity) are assigned
+     "No Data" and rendered in NO_DATA_COLOR (light gray). They are excluded
+     from the Jenks fit so missing data never distorts class boundaries.
+
+  2. Index-Safe classification:
+     A single boolean valid_mask drives both the Jenks fit and the .loc
+     assignment, guaranteeing jenks.yb[i] maps to the i-th valid row with
+     zero NaN-induced positional drift.
+
+  3. Sequential index before Plotly:
+     plot_gdf is reset_index(drop=True) before figure creation so that
+     locations=plot_gdf.index matches the sequential GeoJSON feature IDs that
+     Plotly assigns when converting a GeoSeries.
+
+  4. Per-trace customdata alignment:
+     px.choropleth_map creates one trace per Jenks class. Plotly aligns
+     customdata positionally within each trace (index 0 → first point of that
+     trace). We therefore extract cd_array[locs] for each trace individually
+     to avoid cross-class data leakage in hover tooltips.
+
+  5. Semantic color routing:
+     Palette chosen automatically: YlOrRd (vulnerability), Reds (conflict/
+     risk), Viridis (capacity/access), Blues (other). All scales are
+     sequential (light = low, dark = high).
+
+  6. Dynamic viewport:
+     _compute_viewport() derives center and zoom from the GDF bounding box so
+     both full-CAR and single-territory views are handled automatically without
+     any caller-side computation.
 
 World Bank PRWP 11309 Alignment:
-  - Choropleth encodes single index (Security, Water, GDP) for focus
-  - Radar chart shows 5-dimensional trade-offs for detailed decision-making
-  - Both visualizations preserve NaN to maintain data honesty
+  - Choropleth encodes a single index for analytical focus.
+  - Radar chart shows 5-dimensional vulnerability trade-offs.
+  - Both visualizations preserve NaN to maintain data honesty.
 """
 
 from __future__ import annotations
@@ -48,12 +53,49 @@ import pandas as pd
 
 from .config import (
     CAPACITY_METRICS,
-    CAR_BOUNDS,
     DETAIL_COLUMNS,
     NO_DATA_COLOR,
     RISK_METRICS,
 )
 from .formatting import label_for_column, safe_float
+
+
+# Columns shown as mini-gauge bars in the detailed hover tooltip.
+# Tuple layout: (display label, DataFrame column, is_risk_metric)
+# is_risk=True  → red scale (high score = danger)
+# is_risk=False → green scale (high score = good)
+_PILLAR_HOVER: tuple[tuple[str, str, bool], ...] = (
+    ("💰 Économie",         "Index_GDP",            False),
+    ("💧 Accès Eau",        "Index_water_access",   False),
+    ("🏗️ Infrastructures",  "Index_Infrastructure", False),
+)
+
+
+def _gauge(score: float | None, *, is_risk: bool = False, blocks: int = 5) -> str:
+    """Convert a 0-100 score into a 5-block emoji progress bar.
+
+    Color logic:
+    - Capacity metric (is_risk=False): green = high score (good access / safe)
+    - Risk metric     (is_risk=True) : red   = high score (dangerous)
+
+    Examples (capacity):
+      20/100 → 🟧⬜⬜⬜⬜  20/100
+      60/100 → 🟨🟨🟨⬜⬜  60/100
+      90/100 → 🟩🟩🟩🟩⬜  90/100
+    """
+    if score is None or not isinstance(score, (int, float)) or pd.isna(score):
+        return "⬜⬜⬜⬜⬜  N/A"
+
+    clamped = max(0.0, min(100.0, float(score)))
+    filled = round(clamped / 100.0 * blocks)
+
+    if is_risk:
+        color = "🟩" if clamped < 20 else ("🟨" if clamped < 40 else ("🟧" if clamped < 70 else "🟥"))
+    else:
+        color = "🟥" if clamped < 20 else ("🟧" if clamped < 40 else ("🟨" if clamped < 70 else "🟩"))
+
+    bar = "".join([color] * filled + ["⬜"] * (blocks - filled))
+    return f"{bar}  {clamped:.0f}/100"
 
 
 def _compute_viewport(gdf: gpd.GeoDataFrame) -> dict:
@@ -87,22 +129,27 @@ def build_map(
     filtered_gdf: gpd.GeoDataFrame,
     color_column: str,
     hover_columns: list[str] | None = None,
+    resolution: str = "",
 ) -> Figure:
     """Create a Jenks-classified choropleth map for the currently selected territory.
 
     Missing values are preserved as a distinct "No Data" category and excluded
     from Jenks classification so they do not distort the class break calculation.
     The color palette is determined automatically via semantic routing based on
-    the metric type (RISK_METRICS → Reds, CAPACITY_METRICS → Viridis, etc.).
+    the metric type (vulnerability → YlOrRd, risks → Reds, capacity → Viridis,
+    others → Blues). All scales are sequential (light=low, dark=high).
 
-    The viewport is set via `fitbounds="geojson"` so Plotly computes the optimal
-    zoom and center automatically from the visible polygons — works identically
-    for full-country and single-territory views without any manual calculation.
+    When `resolution` is Prefecture or Sous-prefecture, the hover tooltip is
+    enriched with 5-block emoji gauges for the three structural pillars (Economy,
+    Water, Infrastructure). At grid-cell resolution the simple tooltip is kept
+    for performance reasons (20k+ cells).
 
     Args:
         filtered_gdf: GeoDataFrame filtered to specific prefecture or all CAR
         color_column: Index column to encode (e.g., "Index_conflicts")
         hover_columns: Optional list of columns to display in hover tooltip
+        resolution: Current spatial resolution string from config.SPATIAL_RESOLUTIONS.
+            Used to decide between simple and detailed hover tooltips.
 
     Returns:
         Plotly Figure (choropleth_map) ready for st.plotly_chart()
@@ -110,6 +157,14 @@ def build_map(
     plot_gdf = filtered_gdf.copy()
     plot_column = "__jenks_class__"
     hover_columns = hover_columns or []
+
+    # Detailed hover active for Prefecture / Sous-prefecture only; not for grid cells.
+    is_detailed_hover = bool(resolution) and not (
+        resolution.startswith("Secteur") or resolution.startswith("Grid")
+    )
+
+    # Include pillar columns so gauge computation can reference them after slicing.
+    pillar_cols = {col for _, col, _ in _PILLAR_HOVER}
 
     # Keep only the columns needed for map rendering to reduce the JSON payload
     # sent to the browser. The full GeoDataFrame can be large even when the
@@ -123,25 +178,39 @@ def build_map(
         "Sous-prefecture",
         "Year",
         *hover_columns,
+        *(pillar_cols if is_detailed_hover else set()),
     }
     existing_columns = [column for column in plot_gdf.columns if column in required_columns]
     plot_gdf = plot_gdf[existing_columns].copy()
 
-    # Simplify polygon geometries to reduce browser rendering lag.
-    # Tolerance of 0.005 degrees (~500m at equator) removes minor vertex details
-    # while preserving topology and overall shape for all 20,000+ grid cells.
-    # plot_gdf['geometry'] = plot_gdf['geometry'].simplify(tolerance=0.005, preserve_topology=True)
+    # CRITICAL: reset to a 0-based sequential index BEFORE any computation.
+    # After territory filtering, the pandas index may be non-contiguous (e.g.,
+    # [5000, 5001, ..., 5099]). Plotly converts the GeoSeries to GeoJSON with
+    # feature IDs equal to the sequential POSITION (0, 1, 2, …), not the pandas
+    # index value. If locations=plot_gdf.index still contains [5000, …], Plotly
+    # looks for feature ID 5000 which doesn't exist → random/wrong colour mapping.
+    plot_gdf = plot_gdf.reset_index(drop=True)
 
-    # Preserve missing values as a dedicated No Data category and exclude them from Jenks.
+    # Convert to numeric once; write back so the column is a clean float series.
     raw_values = pd.to_numeric(plot_gdf[color_column], errors="coerce")
-    no_data_mask = raw_values.isna()
-    valid_values = raw_values.loc[~no_data_mask].dropna()
+    plot_gdf[color_column] = raw_values
 
+    # --- INDEX-SAFE JENKS CLASSIFICATION ---
+    # valid_mask is the single source-of-truth for "has data". It is used
+    # identically for fitting Jenks AND for the .loc assignment, so NaN rows
+    # can never shift the yb array relative to the DataFrame index.
+    #
+    # Why this matters: jenks.yb is a positional array (yb[i] belongs to
+    # the i-th element passed to NaturalBreaks). Using the same boolean mask
+    # for both the fit and the assignment guarantees that yb[i] is written
+    # to exactly the i-th row that satisfies valid_mask — no intermediate
+    # Series or index reconstruction needed.
+    valid_mask = raw_values.notna()
     plot_gdf[plot_column] = "No Data"
 
-    if not valid_values.empty:
-        class_count = min(5, valid_values.nunique())
-        jenks = mc.NaturalBreaks(valid_values.to_numpy(), k=class_count)
+    if valid_mask.any():
+        class_count = min(5, raw_values.loc[valid_mask].nunique())
+        jenks = mc.NaturalBreaks(raw_values.loc[valid_mask].to_numpy(), k=class_count)
         class_labels = [
             "Class 1 (Low)",
             "Class 2",
@@ -150,15 +219,12 @@ def build_map(
             "Class 5 (High)",
         ][:class_count]
 
-        class_codes = jenks.yb
-        valid_index = valid_values.index
-        for idx, class_code in zip(valid_index, class_codes):
-            plot_gdf.at[idx, plot_column] = class_labels[int(class_code)]
+        # Direct .loc[valid_mask] assignment: jenks.yb[i] goes to the i-th
+        # True position of valid_mask — zero NaN-induced drift possible.
+        plot_gdf.loc[valid_mask, plot_column] = [class_labels[int(c)] for c in jenks.yb]
     else:
         class_labels = []
-
-    # Keep the raw metric available for color scale computation.
-    plot_gdf[color_column] = raw_values
+    # --- END INDEX-SAFE JENKS ---
 
     # Build a human-readable hover column: formatted score or "N/A" for missing data.
     plot_gdf["__hover_metric__"] = raw_values.apply(
@@ -171,7 +237,7 @@ def build_map(
     elif color_column in RISK_METRICS:
         chosen_scale = "Reds"     # Risk/negative metrics: danger gradient
     elif color_column in CAPACITY_METRICS:
-        chosen_scale = "Viridis"  # Capacity/access metrics: scientific gradient
+        chosen_scale = "Greens"  # Capacity/access metrics: scientific gradient
     else:
         chosen_scale = "Blues"    # Neutral/descriptive metrics: neutral gradient
 
@@ -223,7 +289,7 @@ def build_map(
         featureidkey="id",
         color=plot_column,
         color_discrete_map=jenks_color_map,
-        category_orders={plot_column: class_labels + ["No Data"]},  # <--- AJOUTE CETTE LIGNE ICI
+        category_orders={plot_column: class_labels + ["No Data"]},
         hover_name=hover_name_col,
         hover_data=hover_data_dict,
         labels=labels_dict,
@@ -270,12 +336,59 @@ def build_map(
         ]
     )
 
-    # Disable cell borders so adjacent polygons don't show white seams.
-    for trace in fig.data:
-        if getattr(trace, "type", "") in {"choroplethmap", "choroplethmapbox"} and hasattr(trace, "marker"):
-            trace.marker.line.width = 0
-            trace.marker.line.color = "rgba(0,0,0,0)"
-    
+    # Remove polygon borders unconditionally. update_traces() is more robust than
+    # a per-trace type check and survives Plotly internal API changes.
+    fig.update_traces(marker_line_width=0, selector={"type": "choroplethmap"})
+
+    # --- DETAILED HOVER (Prefecture / Sous-prefecture resolutions) ----------------
+    # Build emoji gauge strings for each pillar and inject them into customdata
+    # so the hovertemplate can reference them with %{customdata[i]}.
+    if is_detailed_hover:
+        for _pillar_label, col_key, col_is_risk in _PILLAR_HOVER:
+            if col_key in plot_gdf.columns:
+                vals = pd.to_numeric(plot_gdf[col_key], errors="coerce")
+                plot_gdf[f"__pg_{col_key}__"] = vals.apply(
+                    lambda v, r=col_is_risk: _gauge(v, is_risk=r)
+                )
+            else:
+                plot_gdf[f"__pg_{col_key}__"] = "⬜⬜⬜⬜⬜  N/A"
+
+        gauge_cols = [f"__pg_{col_key}__" for _, col_key, _ in _PILLAR_HOVER]
+        # customdata layout: [0]=main metric, [1]=economy, [2]=water, [3]=infra
+        cd_cols = ["__hover_metric__"] + gauge_cols
+        cd_array = plot_gdf[cd_cols].values.tolist()
+
+        metric_label = label_for_column(color_column)
+        pillar_lines = "".join(
+            f"{label}: " + "%{customdata[" + str(i + 1) + "]}<br>"
+            for i, (label, _, _) in enumerate(_PILLAR_HOVER)
+        )
+        hovertemplate = (
+            "<b>%{hovertext}</b><br>"
+            + f"🎯 {metric_label}: " + "%{customdata[0]}<br>"
+            + "<span style='color:#aaa'>──────────────────</span><br>"
+            + pillar_lines
+            + "<extra></extra>"
+        )
+
+        zone_col = (
+            "Prefecture" if "Prefecture" in plot_gdf.columns
+            else ("Sous-prefecture" if "Sous-prefecture" in plot_gdf.columns else "id")
+        )
+        hovertext = plot_gdf[zone_col].fillna("—").tolist()
+
+        for trace in fig.data:
+            # Each trace covers only a subset of locations (one Jenks class).
+            # Plotly aligns customdata positionally within the trace (index 0 of
+            # customdata → first point of the trace), NOT by location value.
+            # We must therefore extract the slice of cd_array / hovertext that
+            # corresponds to this trace's locations, preserving their order.
+            locs = list(trace.locations) if trace.locations is not None else []
+            trace.customdata    = [cd_array[i] for i in locs]
+            trace.hovertext     = [hovertext[i] for i in locs]
+            trace.hovertemplate = hovertemplate
+    # ------------------------------------------------------------------------------
+
     # Fit viewport to the visible polygons: center and zoom derived from the
     # bounding box of plot_gdf, so both full-CAR and territory views are handled
     # automatically without any caller-side computation.

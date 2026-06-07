@@ -16,7 +16,6 @@ from .config import (
 )
 from .data import (
     aggregate_by_resolution,
-    compute_overall_vulnerability,
     get_csv_year_options,
     get_index_columns,
     get_prefecture_options,
@@ -34,9 +33,13 @@ def txt(key: str) -> str:
     lang = st.session_state.get("lang", "FR")
     return UI_TEXTS[lang].get(key, key)
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def _cached_load(csv_str: str, shp_str: str, selected_year: int):
     return load_dashboard_data(csv_str, shp_str, year=selected_year)
+
+@st.cache_data(ttl=3600)
+def _cached_year_options(csv_str: str) -> list[int]:
+    return get_csv_year_options(csv_str)
 
 def select_metric(label: str, options: list[str], default_value: str) -> str:
     default_index = options.index(default_value) if default_value in options else 0
@@ -135,7 +138,7 @@ def _compute_kpi_values(gdf, persona: str, pop_col: str | None = None) -> list[t
 
 def _render_kpi_cards(metric_values: list[tuple[str, float | None]]) -> None:
     metric_columns = st.columns(3)
-    for column, (metric_name, value) in zip(metric_columns, metric_values, strict=True):
+    for column, (metric_name, value) in zip(metric_columns, metric_values):
         with column:
             metric_text = "N/A" if pd.isna(value) else f"{float(value):.1f} / 100"
             st.metric(txt(metric_name), metric_text)
@@ -165,12 +168,12 @@ def _render_detail_panel(aggregated_gdf) -> None:
                 st.caption(txt("radar_caption"))
                 radar_fig = build_radar_chart(row)
                 st.plotly_chart(radar_fig, use_container_width="stretch")
-        except Exception:
-            pass
+        except Exception as exc:
+            st.warning(f"Profil indisponible pour la cellule {detail_cell_id} : {exc}")
 
 def main() -> None:
     try:
-        available_years = get_csv_year_options(str(CSV_PATH))
+        available_years = _cached_year_options(str(CSV_PATH))
         if not available_years:
             st.error("No year data found.")
             st.stop()
@@ -193,8 +196,11 @@ def main() -> None:
         filtered_gdf = dashboard_gdf.copy()
         display_name = txt("all_territories")
     else:
-        filtered_gdf = dashboard_gdf[dashboard_gdf["Prefecture"].astype(str) == territory_choice].copy()
+        filtered_gdf = dashboard_gdf[dashboard_gdf["Prefecture"] == territory_choice].copy()
         display_name = territory_choice
+        if filtered_gdf.empty:
+            st.warning(f"Aucune donnée trouvée pour le territoire : **{territory_choice}**.")
+            st.stop()
 
     # Grid resolution: use the territory-filtered GDF directly — no dissolve needed.
     # Prefecture/Sous-prefecture: aggregate (dissolve + mean) by administrative unit.
@@ -202,8 +208,6 @@ def main() -> None:
         aggregated_gdf = filtered_gdf.copy()
     else:
         aggregated_gdf = aggregate_by_resolution(filtered_gdf, resolution_option)
-    aggregated_gdf = compute_overall_vulnerability(aggregated_gdf)
-
     # Guard: if the metric selected in sidebar isn't in the current aggregation
     # (e.g. column dropped after dissolve), fall back to the first available.
     aggregated_index_columns = get_index_columns(aggregated_gdf)
@@ -245,6 +249,7 @@ def main() -> None:
             aggregated_gdf,
             selected_map_metric,
             hover_columns=[selected_map_metric],
+            resolution=resolution_option,
         )
     st.plotly_chart(choropleth_figure, width="stretch")
 
