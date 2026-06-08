@@ -26,7 +26,7 @@ DESIGN DECISIONS:
 
   5. Semantic color routing:
      Palette chosen automatically: YlOrRd (vulnerability), Reds (conflict/
-     risk), Viridis (capacity/access), Blues (other). All scales are
+     risk), Greens (capacity/access), Blues (other). All scales are
      sequential (light = low, dark = high).
 
   6. Dynamic viewport:
@@ -57,13 +57,32 @@ from .config import (
     NO_DATA_COLOR,
     RISK_METRICS,
 )
-from .formatting import label_for_column, safe_float
+from .formatting import MISSING_VALUE_LABEL, format_metric_value, label_for_column, safe_float
 
 
 # Columns shown as mini-gauge bars in the detailed hover tooltip.
 # Tuple layout: (display label, DataFrame column, is_risk_metric)
 # is_risk=True  → red scale (high score = danger)
 # is_risk=False → green scale (high score = good)
+def _hover_zone_column(resolution: str, columns: set[str] | frozenset[str]) -> str | None:
+    """Pick the finest admin label column available for the active resolution."""
+    if resolution.startswith("Secteur") or resolution.startswith("Grid"):
+        return "id" if "id" in columns else None
+    if resolution.startswith("Commune") and "admin3name" in columns:
+        return "admin3name"
+    if resolution.startswith("Sous-prefecture") and "Sous-prefecture" in columns:
+        return "Sous-prefecture"
+    if resolution.startswith("Prefecture") and "Prefecture" in columns:
+        return "Prefecture"
+    if "admin3name" in columns:
+        return "admin3name"
+    if "Sous-prefecture" in columns:
+        return "Sous-prefecture"
+    if "Prefecture" in columns:
+        return "Prefecture"
+    return "id" if "id" in columns else None
+
+
 _PILLAR_HOVER: tuple[tuple[str, str, bool], ...] = (
     ("💰 Économie",         "Index_GDP",            False),
     ("💧 Accès Eau",        "Index_water_access",   False),
@@ -84,7 +103,7 @@ def _gauge(score: float | None, *, is_risk: bool = False, blocks: int = 5) -> st
       90/100 → 🟩🟩🟩🟩⬜  90/100
     """
     if score is None or not isinstance(score, (int, float)) or pd.isna(score):
-        return "⬜⬜⬜⬜⬜  N/A"
+        return f"⬜⬜⬜⬜⬜  {MISSING_VALUE_LABEL}"
 
     clamped = max(0.0, min(100.0, float(score)))
     filled = round(clamped / 100.0 * blocks)
@@ -95,7 +114,7 @@ def _gauge(score: float | None, *, is_risk: bool = False, blocks: int = 5) -> st
         color = "🟥" if clamped < 20 else ("🟧" if clamped < 40 else ("🟨" if clamped < 70 else "🟩"))
 
     bar = "".join([color] * filled + ["⬜"] * (blocks - filled))
-    return f"{bar}  {clamped:.0f}/100"
+    return f"{bar}  {clamped:.0f}"
 
 
 def _compute_viewport(gdf: gpd.GeoDataFrame) -> dict:
@@ -130,13 +149,14 @@ def build_map(
     color_column: str,
     hover_columns: list[str] | None = None,
     resolution: str = "",
+    lang: str = "FR",
 ) -> Figure:
     """Create a Jenks-classified choropleth map for the currently selected territory.
 
     Missing values are preserved as a distinct "No Data" category and excluded
     from Jenks classification so they do not distort the class break calculation.
     The color palette is determined automatically via semantic routing based on
-    the metric type (vulnerability → YlOrRd, risks → Reds, capacity → Viridis,
+    the metric type (vulnerability → YlOrRd, risks → Reds, capacity → Greens,
     others → Blues). All scales are sequential (light=low, dark=high).
 
     When `resolution` is Prefecture or Sous-prefecture, the hover tooltip is
@@ -150,6 +170,7 @@ def build_map(
         hover_columns: Optional list of columns to display in hover tooltip
         resolution: Current spatial resolution string from config.SPATIAL_RESOLUTIONS.
             Used to decide between simple and detailed hover tooltips.
+        lang: UI language code (``FR`` or ``EN``) for hover labels and formatted values.
 
     Returns:
         Plotly Figure (choropleth_map) ready for st.plotly_chart()
@@ -158,7 +179,7 @@ def build_map(
     plot_column = "__jenks_class__"
     hover_columns = hover_columns or []
 
-    # Detailed hover active for Prefecture / Sous-prefecture only; not for grid cells.
+    # Detailed hover for admin resolutions (Commune, Sous-prefecture, Prefecture).
     is_detailed_hover = bool(resolution) and not (
         resolution.startswith("Secteur") or resolution.startswith("Grid")
     )
@@ -179,6 +200,7 @@ def build_map(
         "Year",
         *hover_columns,
         *(pillar_cols if is_detailed_hover else set()),
+        *({"admin3name"} if is_detailed_hover else set()),
     }
     existing_columns = [column for column in plot_gdf.columns if column in required_columns]
     plot_gdf = plot_gdf[existing_columns].copy()
@@ -226,9 +248,13 @@ def build_map(
         class_labels = []
     # --- END INDEX-SAFE JENKS ---
 
-    # Build a human-readable hover column: formatted score or "N/A" for missing data.
+    # Build a human-readable hover column on the 0–100 display scale.
     plot_gdf["__hover_metric__"] = raw_values.apply(
-        lambda v: "N/A" if pd.isna(v) else f"{v:.1f} / 100"
+        lambda v: (
+            MISSING_VALUE_LABEL
+            if pd.isna(v)
+            else format_metric_value(color_column, float(v), lang=lang)
+        )
     )
 
     # Semantic routing: palette chosen automatically based on metric type.
@@ -253,33 +279,35 @@ def build_map(
 
     jenks_color_map["No Data"] = NO_DATA_COLOR
 
-    hover_name_col = (
-        "Prefecture"
-        if "Prefecture" in plot_gdf.columns
-        else ("Sous-prefecture" if "Sous-prefecture" in plot_gdf.columns else None)
-    )
+    hover_name_col = _hover_zone_column(resolution, set(plot_gdf.columns))
 
     # Build native Plotly hover dictionaries so labels stay aligned with the data slice.
     # __hover_metric__ carries the pre-formatted string (value or "N/A") for the tooltip;
     # the raw color_column is excluded from hover to prevent a duplicate "0.00" entry.
     hover_data_dict: dict[str, object] = {plot_column: False, color_column: False}
-    labels_dict: dict[str, str] = {plot_column: label_for_column(color_column)}
+    labels_dict: dict[str, str] = {plot_column: label_for_column(color_column, lang=lang)}
 
     hover_data_dict["__hover_metric__"] = True
-    labels_dict["__hover_metric__"] = f"🎯 {label_for_column(color_column)}"
+    labels_dict["__hover_metric__"] = f"🎯 {label_for_column(color_column, lang=lang)}"
 
-    if "Year" in plot_gdf.columns:
-        hover_data_dict["Year"] = True
-        labels_dict["Year"] = label_for_column("Year")
-
-    if "Sous-prefecture" in plot_gdf.columns:
-        hover_data_dict["Sous-prefecture"] = True
-        labels_dict["Sous-prefecture"] = label_for_column("Sous-prefecture")
+    if is_detailed_hover:
+        if "Year" in plot_gdf.columns:
+            hover_data_dict["Year"] = True
+            labels_dict["Year"] = label_for_column("Year", lang=lang)
+        if "Prefecture" in plot_gdf.columns:
+            hover_data_dict["Prefecture"] = True
+            labels_dict["Prefecture"] = label_for_column("Prefecture", lang=lang)
+        if "Sous-prefecture" in plot_gdf.columns:
+            hover_data_dict["Sous-prefecture"] = True
+            labels_dict["Sous-prefecture"] = label_for_column("Sous-prefecture", lang=lang)
+        if "admin3name" in plot_gdf.columns:
+            hover_data_dict["admin3name"] = True
+            labels_dict["admin3name"] = label_for_column("admin3name", lang=lang)
 
     for column in hover_columns:
         if column != color_column and column in plot_gdf.columns:
             hover_data_dict[column] = ":.2f"
-            labels_dict[column] = label_for_column(column)
+            labels_dict[column] = label_for_column(column, lang=lang)
 
     # Create choropleth with modern Plotly API (not deprecated choropleth_mapbox)
     fig = px.choropleth_map(
@@ -300,15 +328,15 @@ def build_map(
 
     fig.update_layout(
         autosize=True,
-        margin={"l": 0, "r": 0, "t": 0, "b": 0}, # On enlève toutes les marges blanches
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},  # Remove all white margins around the map
         legend=dict(
-            title_text="",          # On enlève le titre redondant de la légende
-            orientation="v",        # Verticale
+            title_text="",  # Drop redundant legend title (color column is in the hover)
+            orientation="v",
             yanchor="top",
-            y=0.98,                 # Collée en haut
+            y=0.98,
             xanchor="left",
-            x=1.01,                 # <-- POUSSE LA LÉGENDE TOTALEMENT SUR LA DROITE (hors de la carte)
-            bgcolor="rgba(255,255,255,0.6)" # Fond légèrement transparent pour faire respirer
+            x=1.01,  # Push legend fully to the right (outside the map canvas)
+            bgcolor="rgba(255,255,255,0.6)",  # Slightly transparent legend background
         )
     )
 
@@ -325,7 +353,7 @@ def build_map(
                 font=dict(size=14),
             ),
             dict(
-                text=f"Gray = no data / uninhabited ({NO_DATA_COLOR})",
+                text=f"Gray = no data or uninhabited ({NO_DATA_COLOR})",
                 x=0.5,
                 y=-0.2,
                 xref="paper",
@@ -351,30 +379,27 @@ def build_map(
                     lambda v, r=col_is_risk: _gauge(v, is_risk=r)
                 )
             else:
-                plot_gdf[f"__pg_{col_key}__"] = "⬜⬜⬜⬜⬜  N/A"
+                plot_gdf[f"__pg_{col_key}__"] = f"⬜⬜⬜⬜⬜  {MISSING_VALUE_LABEL}"
 
         gauge_cols = [f"__pg_{col_key}__" for _, col_key, _ in _PILLAR_HOVER]
         # customdata layout: [0]=main metric, [1]=economy, [2]=water, [3]=infra
         cd_cols = ["__hover_metric__"] + gauge_cols
         cd_array = plot_gdf[cd_cols].values.tolist()
 
-        metric_label = label_for_column(color_column)
+        metric_label = label_for_column(color_column, lang=lang)
         pillar_lines = "".join(
             f"{label}: " + "%{customdata[" + str(i + 1) + "]}<br>"
             for i, (label, _, _) in enumerate(_PILLAR_HOVER)
         )
+        # Plain text only — HTML tags with "/" break Streamlit's Plotly JSON parser.
         hovertemplate = (
-            "<b>%{hovertext}</b><br>"
+            "%{hovertext}<br>"
             + f"🎯 {metric_label}: " + "%{customdata[0]}<br>"
-            + "<span style='color:#aaa'>──────────────────</span><br>"
+            + "──────────────────<br>"
             + pillar_lines
-            + "<extra></extra>"
         )
 
-        zone_col = (
-            "Prefecture" if "Prefecture" in plot_gdf.columns
-            else ("Sous-prefecture" if "Sous-prefecture" in plot_gdf.columns else "id")
-        )
+        zone_col = _hover_zone_column(resolution, set(plot_gdf.columns)) or "id"
         hovertext = plot_gdf[zone_col].fillna("—").tolist()
 
         for trace in fig.data:
@@ -384,9 +409,10 @@ def build_map(
             # We must therefore extract the slice of cd_array / hovertext that
             # corresponds to this trace's locations, preserving their order.
             locs = list(trace.locations) if trace.locations is not None else []
-            trace.customdata    = [cd_array[i] for i in locs]
-            trace.hovertext     = [hovertext[i] for i in locs]
+            trace.customdata = [cd_array[i] for i in locs]
+            trace.hovertext = [hovertext[i] for i in locs]
             trace.hovertemplate = hovertemplate
+            trace.hoverlabel = dict(namelength=0)
     # ------------------------------------------------------------------------------
 
     # Fit viewport to the visible polygons: center and zoom derived from the
@@ -400,20 +426,14 @@ def build_map(
 
 def build_radar_chart(
     row: pd.Series,
+    lang: str = "FR",
 ) -> Figure:
-    """Create a radar chart showing 5-dimensional multidimensional profile.
-    
-    WORLD BANK PRWP 11309 ALIGNMENT:
-      The radar chart displays the 5-dimensional vulnerability framework:
-      1. Primary Economy (agriculture)
-      2. Overall Economy (GDP)
-      3. Health Access
-      4. Water Access
-      5. Education Access
-      
-      Each dimension is scaled to [0, 100] where 100 = high safety/access,
-      0 = high risk/no access. The radar visualization makes trade-offs visible:
-      e.g., "High security but poor water access".
+    """Create a radar chart showing the 5-dimensional vulnerability profile.
+
+    Axes follow ``config.DETAIL_COLUMNS``: overall vulnerability, infrastructure,
+    exposure risk, health access, and water access. Each dimension is scaled to
+    [0, 100] where 100 = high safety/access and 0 = high risk/no access.
+    Risk metrics are inverted so the axis always reads as a safety scale.
     
     DESIGN - NaN Handling:
       Missing values (from field insecurity) are set to -10 (below 0) and
@@ -430,7 +450,7 @@ def build_radar_chart(
     values = []
     labels = []
     for column in DETAIL_COLUMNS:
-        label = label_for_column(column)
+        label = label_for_column(column, lang=lang)
         labels.append(label)
         numeric_value = safe_float(row.get(column, pd.NA))
 

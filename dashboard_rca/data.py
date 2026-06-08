@@ -20,10 +20,17 @@ import numpy as np
 
 from .config import INDEX_PREFIX
 
-# GDP indices must be SUMMED (not averaged) when aggregating cells to administrative
-# units, because the data scientist has already population-weighted each value at
-# cell level. Summing recovers the total economic activity for the territory.
-# After summation they are renormalized to [0, 100] to preserve the UI scale.
+INVALID_ADMIN_LABELS: frozenset[str] = frozenset({"nan", "None", ""})
+
+
+def is_valid_admin_label(value: object) -> bool:
+    """Return True when *value* is a usable administrative place name."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return False
+    return str(value).strip() not in INVALID_ADMIN_LABELS
+
+
+# GDP columns re-scaled to base 100 after territorial mean aggregation.
 GDP_COLUMNS: frozenset[str] = frozenset({
     "Index_GDP",
     "Index_GDP_prim",
@@ -96,6 +103,8 @@ def load_dashboard_data(
         # index_col=0 drops the unnamed row-index column present in the source CSV.
         csv_frame = pd.read_csv(csv_path, index_col=0, na_values=["NA", "NaN", ""])
         spatial_frame = gpd.read_file(shp_path)
+        if "admin3Name" in spatial_frame.columns:
+            spatial_frame = spatial_frame.rename(columns={"admin3Name": "admin3name"})
         spatial_frame['geometry'] = spatial_frame['geometry'].simplify(tolerance=0.005, preserve_topology=True)
     except FileNotFoundError as exc:
         raise FileNotFoundError(
@@ -117,6 +126,8 @@ def load_dashboard_data(
         rename_map["ADM2_FR"] = "Sous-prefecture"
     if rename_map:
         csv_frame = csv_frame.rename(columns=rename_map)
+    if "admin3Name" in csv_frame.columns:
+        csv_frame = csv_frame.rename(columns={"admin3Name": "admin3name"})
 
     if "Year" in csv_frame.columns:
         csv_frame["Year"] = pd.to_numeric(csv_frame["Year"], errors="coerce")
@@ -129,9 +140,20 @@ def load_dashboard_data(
         csv_frame = csv_frame.rename(columns=rename_idx)
     csv_frame = _scale_index_columns_to_hundred(csv_frame)
 
+    # Prefer the CSV commune label when both frames carry admin3name.
+    if "admin3name" in spatial_frame.columns and "admin3name" in csv_frame.columns:
+        spatial_frame = spatial_frame.drop(columns=["admin3name"])
+
     # Left join keeps all spatial features; NaN for cells without CSV data.
     # validate="1:1" ensures no duplicate keys (data integrity check).
     merged = spatial_frame.merge(csv_frame, on="id", how="left", validate="1:1")
+
+    if "admin3name_x" in merged.columns or "admin3name_y" in merged.columns:
+        left = merged.get("admin3name_x")
+        right = merged.get("admin3name_y")
+        merged["admin3name"] = right if left is None else (right.fillna(left) if right is not None else left)
+        drop_cols = [c for c in ("admin3name_x", "admin3name_y") if c in merged.columns]
+        merged = merged.drop(columns=drop_cols)
 
     # Pre-cast administrative columns to str once at load time so ui.py never
     # calls .astype(str) at interaction time. NaN becomes the "nan" string,
@@ -140,6 +162,8 @@ def load_dashboard_data(
         merged["Prefecture"] = merged["Prefecture"].astype(str)
     if "Sous-prefecture" in merged.columns:
         merged["Sous-prefecture"] = merged["Sous-prefecture"].astype(str)
+    if "admin3name" in merged.columns:
+        merged["admin3name"] = merged["admin3name"].astype(str)
 
     return merged
 
@@ -195,20 +219,22 @@ def get_index_columns(gdf: gpd.GeoDataFrame) -> list[str]:
 
 
 def _resolve_grouping_column(gdf: gpd.GeoDataFrame, resolution: str) -> str | None:
-    """Resolve the grouping column based on resolution string.
+    """Resolve the grouping column based on the canonical resolution key.
 
     Args:
         gdf: GeoDataFrame to check for available columns
-        resolution: Resolution option (e.g., "Prefecture", "Sous-prefecture")
+        resolution: One of config.SPATIAL_RESOLUTIONS (e.g. "Prefecture (Admin 1)")
 
     Returns:
         Column name or None if not found or grid-cell resolution selected.
     """
-    if resolution.startswith("Grid Cell") or resolution.startswith("Secteur"):
+    if resolution == "Secteur (5×5 km)":
         return None
-    if resolution.startswith("Prefecture"):
+    if resolution == "Commune (Admin 3)":
+        return "admin3name" if "admin3name" in gdf.columns else None
+    if resolution == "Prefecture (Admin 1)":
         return "Prefecture" if "Prefecture" in gdf.columns else None
-    elif resolution.startswith("Sous-prefecture"):
+    if resolution == "Sous-prefecture (Admin 2)":
         return "Sous-prefecture" if "Sous-prefecture" in gdf.columns else None
 
     return None
@@ -221,14 +247,9 @@ def _compute_numeric_aggregations(
 ) -> pd.DataFrame:
     """Vectorized numeric aggregation using a single pandas groupby pass.
 
-    Aggregation strategy:
-    - GDP columns  (Index_GDP*): SUM across cells, then renormalize to [0, 100].
-      Rationale: the data scientist pre-weights each cell by its population share,
-      so summing cells within a territory recovers the total economic activity.
-      Averaging would dilute high-GDP cells and produce a meaningless per-cell rate.
-    - All other indices (access, risk, …): MEAN across cells.
-      Rationale: these are rates/proportions that should be averaged over the
-      territory, not summed.
+    All Index_* columns are averaged (``.mean()``) when dissolving to an admin unit.
+    GDP columns are then re-normalised to base 100 within the current view:
+    ``(col / col.max()) * 100`` so the strongest unit scores 100.
 
     Args:
         working_gdf: GeoDataFrame to aggregate.
@@ -247,13 +268,16 @@ def _compute_numeric_aggregations(
     for col in available:
         num_df[col] = pd.to_numeric(num_df[col], errors="coerce")
 
-    gdp_cols  = [c for c in available if c in GDP_COLUMNS]
-    mean_cols = [c for c in available if c not in GDP_COLUMNS]
-
-    agg_dict: dict[str, str] = {c: "sum" for c in gdp_cols}
-    agg_dict.update({c: "mean" for c in mean_cols})
-
+    agg_dict: dict[str, str] = {c: "mean" for c in available}
     result = num_df.groupby(group_col, dropna=False).agg(agg_dict).reset_index()
+
+    for col in available:
+        if col not in GDP_COLUMNS:
+            continue
+        series = pd.to_numeric(result[col], errors="coerce")
+        vmax = series.max(skipna=True)
+        if pd.notna(vmax) and vmax > 0:
+            result[col] = series / vmax * 100.0
 
     return result
 
@@ -261,10 +285,8 @@ def _compute_numeric_aggregations(
 def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDataFrame:
     """Aggregate the GeoDataFrame to the selected spatial resolution.
 
-    NOTE: @st.cache_data is intentionally NOT used here. The cache key would be
-    built only from `resolution` (GeoDataFrames are unhashable), causing stale data
-    to be returned when the territory filter changes between calls. The upstream
-    `_cached_load` already caches the expensive data-loading step.
+    Caching is handled in ``ui._cached_aggregation`` with an explicit territory
+    key so GeoDataFrames are never hashed directly.
 
     Buffers removed: the previous expand/shrink buffer trick (+10 m / -10 m) was
     used to merge nearly-touching polygons before dissolve. It added two O(N)
@@ -277,7 +299,7 @@ def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDa
 
     Returns:
         Aggregated GeoDataFrame dissolved by the chosen administrative unit.
-        GDP columns are summed then renormalized; all other indices are averaged.
+        All indices are averaged; GDP columns are then scaled to base 100 (max = 100).
         Returns gdf unchanged for Secteur (grid-cell) resolution.
     """
     # No defensive copy here: the caller (ui.py) already passes .copy() slices.
@@ -287,29 +309,36 @@ def aggregate_by_resolution(gdf: gpd.GeoDataFrame, resolution: str) -> gpd.GeoDa
     if group_col is None:
         return gdf
 
+    working = gdf
+    if group_col == "admin3name":
+        working = gdf[gdf[group_col].map(is_valid_admin_label)].copy()
+        if working.empty:
+            return working
+
     numeric_columns = [c for c in gdf.columns if c.startswith(INDEX_PREFIX)]
-    numeric_df = _compute_numeric_aggregations(gdf, group_col, numeric_columns)
+    numeric_df = _compute_numeric_aggregations(working, group_col, numeric_columns)
 
-    # A micro-buffer of 0.001° closes sub-pixel gaps between adjacent grid cells
-    # before dissolve, preventing sliver artefacts on the rendered map.
-    # The negative buffer afterwards restores the original boundaries.
-    # Operating in geographic CRS (degrees) keeps the operation fast — no UTM
-    # reprojection needed for a purely topological fix at this scale.
-    gdf = gdf.copy()  # single protective copy before geometry mutation
-    gdf["geometry"] = gdf.geometry.buffer(0.001)
+    # Micro-buffer in a projected CRS (metres) closes sub-pixel gaps between
+    # adjacent grid cells before dissolve. Geographic degree buffers are unreliable.
+    _BUF_M = 150.0
+    _WORK_CRS = "EPSG:3857"
+    source_crs = working.crs
 
-    dissolved = gdf.dissolve(by=group_col).reset_index()
+    gdf = working.copy()
+    gdf_proj = gdf.to_crs(_WORK_CRS)
+    gdf_proj["geometry"] = gdf_proj.geometry.buffer(_BUF_M)
 
-    # Drop raw numeric columns from dissolved output; they will be re-joined
-    # from numeric_df which contains the correctly aggregated values.
+    dissolved = gdf_proj.dissolve(by=group_col).reset_index()
+
     cols_to_drop = [c for c in numeric_columns if c in dissolved.columns and c != group_col]
     dissolved = dissolved.drop(columns=cols_to_drop)
 
-    # Shrink back and fix any invalid geometries left by the dissolve in one pass.
     if "geometry" in dissolved.columns:
-        dissolved["geometry"] = dissolved["geometry"].buffer(-0.001).buffer(0)
+        dissolved["geometry"] = dissolved["geometry"].buffer(-_BUF_M).buffer(0)
+
+    dissolved = dissolved.to_crs(source_crs)
 
     merged = dissolved.merge(numeric_df, on=group_col, how="left")
-    merged = gpd.GeoDataFrame(merged, geometry="geometry", crs=gdf.crs)
+    merged = gpd.GeoDataFrame(merged, geometry="geometry", crs=source_crs)
 
     return merged

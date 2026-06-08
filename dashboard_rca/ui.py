@@ -1,6 +1,7 @@
 """Streamlit UI composition for the dashboard."""
 
 from __future__ import annotations
+
 import pandas as pd
 import streamlit as st
 
@@ -10,36 +11,171 @@ from .config import (
     SPATIAL_RESOLUTIONS,
     HUMAN_CENTRIC_METRICS,
     CSV_PATH,
+    DATA_YEAR,
     DEFAULT_MAP_COLUMN,
     SHP_PATH,
     UI_TEXTS,
 )
 from .data import (
     aggregate_by_resolution,
-    get_csv_year_options,
     get_index_columns,
     get_prefecture_options,
+    is_valid_admin_label,
     load_dashboard_data,
 )
-from .formatting import label_for_column
+from .formatting import format_metric_value, format_score_value, label_for_column
 from .style import inject_custom_css
 from .visuals import build_map, build_radar_chart
 
+ZONE_KEY_SEP = " · "
+
 st.set_page_config(layout="wide", page_title="RR_WLD 2025-520 Dashboard")
 inject_custom_css()
+
 
 def txt(key: str) -> str:
     """Fetch text from UI_TEXTS based on current language state."""
     lang = st.session_state.get("lang", "FR")
     return UI_TEXTS[lang].get(key, key)
 
+
+def _current_lang() -> str:
+    return st.session_state.get("lang", "FR")
+
+
 @st.cache_data(ttl=3600)
 def _cached_load(csv_str: str, shp_str: str, selected_year: int):
     return load_dashboard_data(csv_str, shp_str, year=selected_year)
 
+
 @st.cache_data(ttl=3600)
-def _cached_year_options(csv_str: str) -> list[int]:
-    return get_csv_year_options(csv_str)
+def _cached_aggregation(
+    _dashboard_gdf,
+    territory: str,
+    resolution: str,
+    year: int,
+):
+    """Cache territory filter + dissolve; GDF excluded from cache key (underscore)."""
+    if territory == "All territories":
+        filtered = _dashboard_gdf.copy()
+    else:
+        filtered = _dashboard_gdf[_dashboard_gdf["Prefecture"] == territory].copy()
+
+    if resolution.startswith("Secteur"):
+        return filtered, filtered.copy()
+
+    return filtered, aggregate_by_resolution(filtered, resolution)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_build_map(
+    _gdf,
+    metric: str,
+    resolution: str,
+    territory: str,
+    year: int,
+    lang: str,
+):
+    """Cache Plotly choropleth keyed on scalar filter arguments including language."""
+    return build_map(
+        _gdf,
+        metric,
+        hover_columns=[metric],
+        resolution=resolution,
+        lang=lang,
+    )
+
+
+def _inhabited_mask(gdf, pop_col: str | None) -> pd.Series:
+    """Cells with population > 0, or — when no pop column — any human-centric data."""
+    if pop_col is not None:
+        return pd.to_numeric(gdf.get(pop_col, pd.Series(dtype=float)), errors="coerce") > 0
+
+    human_cols = [c for c in HUMAN_CENTRIC_METRICS if c in gdf.columns]
+    if human_cols:
+        return (
+            gdf[human_cols]
+            .apply(lambda col: pd.to_numeric(col, errors="coerce"))
+            .notna()
+            .any(axis=1)
+        )
+
+    return pd.Series(True, index=gdf.index)
+
+
+def _is_admin_resolution(resolution: str) -> bool:
+    return not resolution.startswith("Secteur") and not resolution.startswith("Grid")
+
+
+def _map_caption(resolution: str) -> str:
+    return txt("map_caption_admin") if _is_admin_resolution(resolution) else txt("map_caption_secteur")
+
+
+def _profile_caption(resolution: str) -> str:
+    return txt("profile_caption_admin") if _is_admin_resolution(resolution) else txt("profile_caption_secteur")
+
+
+def _macro_caption(resolution: str) -> str:
+    if _is_admin_resolution(resolution):
+        return txt("macro_caption_admin")
+    return txt("macro_caption")
+
+
+def _detail_zone_column(resolution: str) -> str:
+    if resolution.startswith("Prefecture"):
+        return "Prefecture"
+    if resolution.startswith("Sous-prefecture"):
+        return "Sous-prefecture"
+    if resolution.startswith("Commune"):
+        return "admin3name"
+    return "id"
+
+
+def _format_detail_zone_key(row: pd.Series, resolution: str) -> str:
+    if resolution.startswith("Commune"):
+        commune = str(row.get("admin3name", ""))
+        prefecture = str(row.get("Prefecture", ""))
+        return f"{commune}{ZONE_KEY_SEP}{prefecture}"
+    zone_col = _detail_zone_column(resolution)
+    return str(row.get(zone_col, ""))
+
+
+def _filter_detail_rows(aggregated_gdf: pd.DataFrame, resolution: str, detail_key: str) -> pd.DataFrame:
+    if resolution.startswith("Commune"):
+        if ZONE_KEY_SEP not in detail_key:
+            return aggregated_gdf.iloc[0:0]
+        commune, prefecture = detail_key.split(ZONE_KEY_SEP, 1)
+        return aggregated_gdf[
+            aggregated_gdf["admin3name"].astype(str).eq(commune)
+            & aggregated_gdf["Prefecture"].astype(str).eq(prefecture)
+        ]
+    zone_col = _detail_zone_column(resolution)
+    return aggregated_gdf[aggregated_gdf[zone_col].astype(str) == detail_key]
+
+
+def _detail_zone_options(aggregated_gdf, resolution: str) -> list[str]:
+    if resolution.startswith("Commune"):
+        valid = aggregated_gdf[aggregated_gdf["admin3name"].map(is_valid_admin_label)]
+        keys = {_format_detail_zone_key(row, resolution) for _, row in valid.iterrows()}
+        return sorted(keys)
+
+    zone_col = _detail_zone_column(resolution)
+    if zone_col == "id":
+        return sorted(aggregated_gdf["id"].dropna().astype(str).unique().tolist())
+
+    values = aggregated_gdf[zone_col].dropna().astype(str).unique().tolist()
+    return sorted(v for v in values if is_valid_admin_label(v))
+
+
+def _sidebar_lang() -> None:
+    """Render the language switcher at the top of the sidebar."""
+    with st.sidebar:
+        st.session_state.lang = st.radio(
+            "🌐 Langue / Language",
+            options=["FR", "EN"],
+            horizontal=True,
+        )
+
 
 def select_metric(label: str, options: list[str], default_value: str) -> str:
     default_index = options.index(default_value) if default_value in options else 0
@@ -47,8 +183,9 @@ def select_metric(label: str, options: list[str], default_value: str) -> str:
         label,
         options=options,
         index=default_index,
-        format_func=txt, # On utilise la traduction !
+        format_func=txt,
     )
+
 
 def _sidebar_hr():
     """Thin separator that bypasses Streamlit's padded st.divider()."""
@@ -57,22 +194,16 @@ def _sidebar_hr():
         unsafe_allow_html=True,
     )
 
+
 def _sidebar_section(label: str) -> None:
     """Compact uppercase section header replacing st.subheader."""
     st.markdown(f"**{label}**", unsafe_allow_html=False)
 
+
 def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, str, str]:
     with st.sidebar:
-        # 🌐 LANGUE — label inline du radio, horizontal
-        st.session_state.lang = st.radio(
-            "🌐 Langue / Language",
-            options=["FR", "EN"],
-            horizontal=True,
-        )
-
         _sidebar_hr()
 
-        # 👤 PROFIL
         _sidebar_section(txt("user_profile"))
         persona = st.radio(
             "Role",
@@ -84,7 +215,6 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
 
         _sidebar_hr()
 
-        # 🗺️ FILTRES SPATIAUX
         _sidebar_section(txt("spatial_filters"))
         prefecture_options = get_prefecture_options(dashboard_gdf)
         territory_choice = st.selectbox(
@@ -102,7 +232,6 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
 
         _sidebar_hr()
 
-        # 📊 VISUALISATION
         _sidebar_section(txt("data_vis"))
         selected_map_metric = select_metric(
             txt("highlight_index"),
@@ -112,148 +241,199 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
 
     return persona, territory_choice, resolution_option, selected_map_metric
 
-def _compute_kpi_values(gdf, persona: str, pop_col: str | None = None) -> list[tuple[str, float | None]]:
+
+def _kpi_source_gdf(
+    filtered_gdf: pd.DataFrame,
+    aggregated_gdf: pd.DataFrame,
+    resolution: str,
+) -> pd.DataFrame:
+    """Use the same spatial grain as the map for macro KPI cards."""
+    return aggregated_gdf if _is_admin_resolution(resolution) else filtered_gdf
+
+
+def _compute_kpi_values(
+    gdf,
+    persona: str,
+    pop_col: str | None = None,
+    *,
+    use_inhabited_mask: bool = True,
+) -> list[tuple[str, float | None, str | None]]:
     persona_metrics = PERSONA_KPI_DEFINITIONS[persona]
+    inhabited = _inhabited_mask(gdf, pop_col) if use_inhabited_mask else pd.Series(True, index=gdf.index)
     metric_values = []
     for metric_label, candidate_columns in persona_metrics:
         available_columns = [col for col in candidate_columns if col in gdf.columns]
         if not available_columns:
-            metric_values.append((metric_label, pd.NA))
+            metric_values.append((metric_label, pd.NA, None))
             continue
         col_means = []
         for col in available_columns:
-            if col in HUMAN_CENTRIC_METRICS:
-                if pop_col is not None:
-                    mask = pd.to_numeric(gdf.get(pop_col, pd.Series()), errors="coerce") > 0
-                    valid = gdf[mask]
-                    val = pd.to_numeric(valid[col], errors="coerce").mean(skipna=True) if not valid.empty else pd.NA
-                else:
-                    val = pd.to_numeric(gdf[col], errors="coerce").mean(skipna=True)
+            if use_inhabited_mask and col in HUMAN_CENTRIC_METRICS:
+                valid = gdf[inhabited]
+                val = (
+                    pd.to_numeric(valid[col], errors="coerce").mean(skipna=True)
+                    if not valid.empty
+                    else pd.NA
+                )
             else:
                 val = pd.to_numeric(gdf[col], errors="coerce").mean(skipna=True)
             col_means.append(val)
         metric_value = pd.Series(col_means, dtype="float64").mean(skipna=True)
-        metric_values.append((metric_label, metric_value))
+        source_col = available_columns[0] if len(available_columns) == 1 else None
+        metric_values.append((metric_label, metric_value, source_col))
     return metric_values
 
-def _render_kpi_cards(metric_values: list[tuple[str, float | None]]) -> None:
+
+def _render_kpi_cards(metric_values: list[tuple[str, float | None, str | None]]) -> None:
+    lang = _current_lang()
     metric_columns = st.columns(3)
-    for column, (metric_name, value) in zip(metric_columns, metric_values):
+    for column, (metric_name, value, source_col) in zip(metric_columns, metric_values):
         with column:
-            metric_text = "N/A" if pd.isna(value) else f"{float(value):.1f} / 100"
+            metric_text = (
+                format_metric_value(source_col or "", value, lang=lang)
+                if source_col
+                else format_score_value(value, lang=lang)
+            )
             st.metric(txt(metric_name), metric_text)
 
-def _render_detail_panel(aggregated_gdf) -> None:
-    st.markdown(f"### {txt('profile_title')}")
-    st.caption(txt("profile_caption"))
 
-    detail_cell_id = st.selectbox(
-        txt("select_cell"),
-        options=[""] + sorted(aggregated_gdf["id"].dropna().astype(str).unique().tolist()),
-        index=0,
+def _render_detail_panel(aggregated_gdf, resolution: str) -> None:
+    st.markdown(f"### {txt('profile_title')}")
+    st.caption(_profile_caption(resolution))
+
+    zone_col = _detail_zone_column(resolution)
+    zone_options = _detail_zone_options(aggregated_gdf, resolution)
+    select_label = txt("select_cell") if zone_col == "id" else txt("select_zone")
+
+    detail_zone = st.selectbox(select_label, options=[""] + zone_options, index=0)
+
+    if not detail_zone:
+        return
+
+    detail = _filter_detail_rows(aggregated_gdf, resolution, detail_zone)
+    if detail.empty:
+        st.warning(txt("profile_unavailable").format(zone=detail_zone))
+        return
+
+    row = detail.iloc[0]
+    st.markdown(f"#### {txt('location_context')}")
+    unknown = txt("unknown_location")
+    prefecture_str = (
+        str(row.get("Prefecture", unknown))
+        if is_valid_admin_label(row.get("Prefecture"))
+        else unknown
+    )
+    sous_pref_str = (
+        str(row.get("Sous-prefecture", unknown))
+        if is_valid_admin_label(row.get("Sous-prefecture"))
+        else unknown
+    )
+    commune_str = (
+        str(row.get("admin3name", unknown))
+        if is_valid_admin_label(row.get("admin3name"))
+        else unknown
+    )
+    year_val = int(row.get("Year", 0)) if pd.notna(row.get("Year")) else 0
+    id_str = str(row.get("id", "—"))
+    st.caption(
+        f"**{txt('Prefecture')}:** {prefecture_str} | **{txt('Sous-prefecture')}:** {sous_pref_str} "
+        f"| **{txt('admin3name')}:** {commune_str} "
+        f"| **{txt('Year')}:** {year_val} | **ID:** {id_str}"
     )
 
-    if detail_cell_id and detail_cell_id != "":
-        try:
-            detail = aggregated_gdf[aggregated_gdf["id"].astype(str) == detail_cell_id]
-            if not detail.empty:
-                row = detail.iloc[0]
-                st.markdown(f"#### {txt('location_context')}")
-                prefecture_str = str(row.get("Prefecture", "Unknown")) if pd.notna(row.get("Prefecture")) else "Unknown"
-                sous_pref_str = str(row.get("Sous-prefecture", "Unknown")) if pd.notna(row.get("Sous-prefecture")) else "Unknown"
-                year_val = int(row.get("Year", 0)) if pd.notna(row.get("Year")) else 0
-                st.caption(f"**Prefecture:** {prefecture_str} | **Sous-prefecture:** {sous_pref_str} | **Year:** {year_val}")
+    st.markdown(f"#### {txt('radar_title')}")
+    st.caption(txt("radar_caption"))
+    radar_fig = build_radar_chart(row, lang=_current_lang())
+    st.plotly_chart(radar_fig, width="stretch")
 
-                st.markdown(f"#### {txt('radar_title')}")
-                st.caption(txt("radar_caption"))
-                radar_fig = build_radar_chart(row)
-                st.plotly_chart(radar_fig, use_container_width="stretch")
-        except Exception as exc:
-            st.warning(f"Profil indisponible pour la cellule {detail_cell_id} : {exc}")
 
 def main() -> None:
+    selected_year = DATA_YEAR
     try:
-        available_years = _cached_year_options(str(CSV_PATH))
-        if not available_years:
-            st.error("No year data found.")
-            st.stop()
-
-        selected_year = available_years[-1]
+        _sidebar_lang()
         dashboard_gdf = _cached_load(str(CSV_PATH), str(SHP_PATH), selected_year)
-    except Exception as exc:
+    except FileNotFoundError as exc:
         st.error(str(exc))
         st.stop()
+    except (ValueError, KeyError, pd.errors.ParserError) as exc:
+        st.error(txt("load_error").format(error=exc))
+        st.stop()
 
-    # Collect ALL Index_* columns from the full (unfiltered) GDF so the sidebar
-    # selectbox always proposes every indicator regardless of the current territory
-    # or resolution filter. Never reassign this variable afterwards.
     all_index_columns = get_index_columns(dashboard_gdf)
     persona, territory_choice, resolution_option, selected_map_metric = _build_sidebar(
         dashboard_gdf, all_index_columns
     )
 
-    if territory_choice == "All territories":
-        filtered_gdf = dashboard_gdf.copy()
-        display_name = txt("all_territories")
-    else:
-        filtered_gdf = dashboard_gdf[dashboard_gdf["Prefecture"] == territory_choice].copy()
-        display_name = territory_choice
-        if filtered_gdf.empty:
-            st.warning(f"Aucune donnée trouvée pour le territoire : **{territory_choice}**.")
-            st.stop()
+    filtered_gdf, aggregated_gdf = _cached_aggregation(
+        dashboard_gdf, territory_choice, resolution_option, selected_year
+    )
+    display_name = (
+        txt("all_territories") if territory_choice == "All territories" else territory_choice
+    )
+    if filtered_gdf.empty:
+        st.warning(txt("no_territory_data").format(territory=territory_choice))
+        st.stop()
 
-    # Grid resolution: use the territory-filtered GDF directly — no dissolve needed.
-    # Prefecture/Sous-prefecture: aggregate (dissolve + mean) by administrative unit.
-    if resolution_option.startswith("Secteur"):
-        aggregated_gdf = filtered_gdf.copy()
-    else:
-        aggregated_gdf = aggregate_by_resolution(filtered_gdf, resolution_option)
-    # Guard: if the metric selected in sidebar isn't in the current aggregation
-    # (e.g. column dropped after dissolve), fall back to the first available.
     aggregated_index_columns = get_index_columns(aggregated_gdf)
+    original_map_metric = selected_map_metric
+    lang = _current_lang()
     if selected_map_metric not in aggregated_index_columns and aggregated_index_columns:
         selected_map_metric = aggregated_index_columns[0]
+        st.info(
+            txt("metric_fallback_info").format(
+                original=label_for_column(original_map_metric, lang=lang),
+                fallback=label_for_column(selected_map_metric, lang=lang),
+            )
+        )
 
-    # --- TITRES ---
     st.title(txt("title"))
     st.markdown(txt("view").format(txt(persona)))
     st.divider()
 
-    # --- MACRO-INDICATORS ---
     st.subheader(txt("macro_indicators").format(display_name))
-    st.caption(txt("macro_caption"))
+    st.caption(_macro_caption(resolution_option))
 
     pop_col = "population" if "population" in filtered_gdf.columns else (
         "Index_population" if "Index_population" in filtered_gdf.columns else None
     )
-    metric_values = _compute_kpi_values(filtered_gdf, persona, pop_col)
+    kpi_gdf = _kpi_source_gdf(filtered_gdf, aggregated_gdf, resolution_option)
+    metric_values = _compute_kpi_values(
+        kpi_gdf,
+        persona,
+        pop_col,
+        use_inhabited_mask=not _is_admin_resolution(resolution_option),
+    )
     _render_kpi_cards(metric_values)
 
-    # --- OVERALL VULNERABILITY ---
     st.divider()
     st.markdown(f"### {txt('overall_vuln')}")
     st.caption(txt("overall_caption"))
-    
-    if "Index_Vulnerab_Final" in aggregated_gdf.columns:
-        vuln_score = aggregated_gdf["Index_Vulnerab_Final"].mean(skipna=True)
-        vuln_text = "N/A" if pd.isna(vuln_score) else f"{float(vuln_score):.1f} / 100"
+
+    if "Index_Vulnerab_Final" in filtered_gdf.columns:
+        vuln_score = pd.to_numeric(
+            filtered_gdf["Index_Vulnerab_Final"], errors="coerce"
+        ).mean(skipna=True)
+        vuln_text = format_score_value(vuln_score, lang=lang)
+        st.caption(txt("territory_vuln_caption"))
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
             st.metric(txt("territory_score"), vuln_text)
 
-    # --- MAP ---
     st.markdown(f"### {txt('geospatial_map')}")
-    st.caption(txt("map_caption"))
-    with st.spinner("Generating..."):
-        choropleth_figure = build_map(
+    st.caption(_map_caption(resolution_option))
+    with st.spinner(txt("map_generating")):
+        choropleth_figure = _cached_build_map(
             aggregated_gdf,
             selected_map_metric,
-            hover_columns=[selected_map_metric],
-            resolution=resolution_option,
+            resolution_option,
+            territory_choice,
+            selected_year,
+            lang,
         )
     st.plotly_chart(choropleth_figure, width="stretch")
 
-    _render_detail_panel(aggregated_gdf)
+    _render_detail_panel(aggregated_gdf, resolution_option)
+
 
 if __name__ == "__main__":
     main()

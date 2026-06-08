@@ -19,6 +19,9 @@ INDEX_PREFIX = "Index_"
 DEFAULT_MAP_COLUMN = "Index_Vulnerab_Final"
 NO_DATA_COLOR = "#d3d3d3"
 
+# Sole panel year bundled in the production dataset (no year selector in the UI).
+DATA_YEAR = 2021
+
 CAR_BOUNDS = {
     "west": 14.0,
     "east": 28.5,
@@ -35,7 +38,7 @@ DETAIL_COLUMNS = [
     "Index_water_access",
 ]
 
-# Capacity/access metrics — mapped to the "Viridis" palette in visuals.py.
+# Capacity/access metrics — mapped to the "Greens" palette in visuals.py.
 CAPACITY_METRICS = [
     "Index_Infrastructure",
     "Index_water_access",
@@ -74,6 +77,7 @@ PERSONA_OPTIONS = [
 
 SPATIAL_RESOLUTIONS = [
     "Secteur (5×5 km)",
+    "Commune (Admin 3)",
     "Sous-prefecture (Admin 2)",
     "Prefecture (Admin 1)",
 ]
@@ -94,7 +98,7 @@ PERSONA_KPI_DEFINITIONS = {
     ],
 }
 
-# --- TRADUCTION DE L'INTERFACE (UI) ET DES DONNÉES ---
+# --- End-user UI strings (FR default locale + EN). Do not use for code comments. ---
 UI_TEXTS = {
     "FR": {
         "title": "🇨🇫 Tableau de bord de la vulnérabilité en RCA",
@@ -107,40 +111,56 @@ UI_TEXTS = {
         "spatial_res": "Résolution spatiale",
         "highlight_index": "Quel indicateur mettre en valeur ?",
         "macro_indicators": "Macro-indicateurs pour : {}",
-        "macro_caption": "Ces cartes de synthèse sont calculées à partir des couches de données actives de cet espace de travail.",
+        "macro_caption": "Ces cartes de synthèse sont calculées à partir des couches de données actives de cet espace de travail. Tous les indicateurs sont sur une échelle 0–100.",
+        "macro_caption_admin": "Moyennes par zone administrative (même logique que la carte). Le PIB est re-normalisé en base 100 dans la vue courante (100 = zone la plus forte).",
+        "scale_suffix": "sur 100",
         "overall_vuln": "Score global de vulnérabilité",
         "overall_caption": "Indicateur composite combinant l'accès aux infrastructures et l'exposition aux risques (0 = Risque Faible, 100 = Risque Élevé).",
+        "territory_vuln_caption": "Moyenne pondérée par cellule 5×5 km (stable quelle que soit la résolution de la carte).",
         "territory_score": "Vulnérabilité du territoire",
         "geospatial_map": "Carte géospatiale avancée",
-        "map_caption": "Cellules de 5×5 km colorées selon l'indicateur normalisé choisi. Le gris clair indique une absence de données.",
+        "map_caption_secteur": "Cellules de 5×5 km colorées selon l'indicateur choisi. Le gris clair indique une absence de données.",
+        "map_caption_admin": "Zones administratives agrégées (moyenne des cellules). Le PIB est en base 100 relative à la vue (100 = maximum local).",
         "timeline": "Chronologie par année",
-        "timeline_caption": "Curseur temporel pour observer l'évolution de la situation sur le terrain.",
+        "timeline_caption": "Sélectionnez l'année du panel de données.",
+        "select_year": "Année",
         "profile_title": "Profil multidimensionnel",
-        "profile_caption": "Inspectez une cellule de la grille pour voir son profil détaillé sur 5 dimensions.",
+        "profile_caption_secteur": "Inspectez une cellule de la grille pour voir son profil détaillé sur 5 dimensions.",
+        "profile_caption_admin": "Sélectionnez une zone administrative pour voir son profil détaillé sur 5 dimensions.",
+        "metric_fallback_info": "Indicateur « {original} » indisponible à cette résolution — affichage de « {fallback} ».",
+        "profile_unavailable": "Profil indisponible pour : **{zone}**",
+        "no_territory_data": "Aucune donnée trouvée pour le territoire : **{territory}**.",
+        "load_error": "Erreur de chargement des données : {error}",
+        "no_year_data": "Aucune année trouvée dans les données.",
+        "unknown_location": "Inconnu",
         "select_cell": "Sélectionner l'ID d'une cellule à analyser (optionnel)",
+        "select_zone": "Sélectionner une zone à analyser (optionnel)",
+        "map_generating": "Génération de la carte…",
         "location_context": "Contexte & Localisation",
         "radar_title": "Graphique radar de vulnérabilité à 5 dimensions",
         "radar_caption": "Chaque dimension va de 0 (risque élevé) à 100 (sécurité élevée). Les données manquantes apparaissent en dessous de l'échelle.",
 
-        # Options des menus
+        # Menu options (FR display labels)
         "Strategic (Donors/PTF)": "Stratégique (Bailleurs / Partenaires)",
         "Operational (NGOs/UN)": "Opérationnel (ONG / Nations Unies)",
-        "Secteur (5×5 km)": "Secteur ultra-local (Grille 5x5 km)",
-        "Sous-prefecture (Admin 2)": "Sous-préfecture (Zone locale)",
-        "Prefecture (Admin 1)": "Préfecture (Région)",
+        "Secteur (5×5 km)": "Secteur (Grille 5×5 km)",
+        "Commune (Admin 3)": "Commune (Admin 3)",
+        "Sous-prefecture (Admin 2)": "Sous-préfecture (Admin 2)",
+        "Prefecture (Admin 1)": "Préfecture (Admin 1)",
 
-        # KPIs — persona Stratégique
+        # KPIs — Strategic persona (FR display labels)
         "Total Economic Activity Proxy": "Activité Économique Globale",
         "Aggregated Infrastructure Access Proxy": "Score d'Infrastructure",
         "Aggregated Risk Exposure Proxy": "Exposition aux Risques",
-        # KPIs — persona Opérationnel
+        # KPIs — Operational persona (FR display labels)
         "Water Access Proxy": "Accès à l'Eau",
         "Health Access Proxy": "Accès aux Services de Santé",
         "Education Access Proxy": "Accès à l'Éducation Primaire",
 
-        # Labels de colonnes — indices pre-normalisés par le Data Scientist
+        # Column labels — pre-normalized index names (FR display labels)
         "Prefecture": "Préfecture",
         "Sous-prefecture": "Sous-préfecture",
+        "admin3name": "Commune",
         "Year": "Année",
         "Index_GDP": "Activité économique (PIB)",
         "Index_GDP_prim": "PIB – Secteur primaire",
@@ -165,17 +185,31 @@ UI_TEXTS = {
         "spatial_res": "Spatial Resolution",
         "highlight_index": "Which index to highlight?",
         "macro_indicators": "Proxy-Based Macro Indicators: {}",
-        "macro_caption": "These summary cards are computed from the active proxy layers bundled in this workspace.",
+        "macro_caption": "These summary cards are computed from the active proxy layers bundled in this workspace. All indicators use a 0–100 scale.",
+        "macro_caption_admin": "Averages per administrative zone (same logic as the map). GDP is re-scaled to base 100 within the current view (100 = strongest zone).",
+        "scale_suffix": "of 100",
         "overall_vuln": "Overall Vulnerability Score",
         "overall_caption": "Composite proxy index combining infrastructure access and risk exposure (0=Low Risk, 100=High Risk).",
+        "territory_vuln_caption": "Mean across 5×5 km grid cells (stable regardless of map resolution).",
         "territory_score": "Territory Vulnerability",
         "geospatial_map": "Advanced Geospatial Map",
-        "map_caption": "5×5 km grid cells colored by the selected normalized proxy. Light gray indicates missing data.",
+        "map_caption_secteur": "5×5 km grid cells colored by the selected proxy. Light gray indicates missing data.",
+        "map_caption_admin": "Aggregated administrative zones (cell mean). GDP uses a local base-100 scale (100 = view maximum).",
         "timeline": "Year timeline",
-        "timeline_caption": "Use the horizontal timeline to move through the panel years and watch the map update.",
+        "timeline_caption": "Select the panel year for all indicators and maps.",
+        "select_year": "Year",
         "profile_title": "Multidimensional Profile",
-        "profile_caption": "Inspect a grid cell to see its 5-dimensional proxy profile.",
+        "profile_caption_secteur": "Inspect a grid cell to see its 5-dimensional proxy profile.",
+        "profile_caption_admin": "Select an administrative zone to see its 5-dimensional proxy profile.",
+        "metric_fallback_info": "Metric « {original} » unavailable at this resolution — showing « {fallback} ».",
+        "profile_unavailable": "Profile unavailable for: **{zone}**",
+        "no_territory_data": "No data found for territory: **{territory}**.",
+        "load_error": "Data loading error: {error}",
+        "no_year_data": "No year data found.",
+        "unknown_location": "Unknown",
         "select_cell": "Select a grid cell ID to analyze (optional)",
+        "select_zone": "Select a zone to analyze (optional)",
+        "map_generating": "Generating map…",
         "location_context": "Location & Context",
         "radar_title": "5-Dimensional Proxy Radar Chart",
         "radar_caption": "Each dimension extends from 0 (high risk) to 100 (high safety). Missing data is shown below the scale.",
@@ -184,6 +218,7 @@ UI_TEXTS = {
         "Strategic (Donors/PTF)": "Strategic (Donors/PTF)",
         "Operational (NGOs/UN)": "Operational (NGOs/UN)",
         "Secteur (5×5 km)": "Grid cell (5×5 km)",
+        "Commune (Admin 3)": "Commune (Admin 3)",
         "Sous-prefecture (Admin 2)": "Sub-prefecture (Admin 2)",
         "Prefecture (Admin 1)": "Prefecture (Admin 1)",
 
@@ -199,6 +234,7 @@ UI_TEXTS = {
         # Column labels — pre-normalized indices from the data scientist
         "Prefecture": "Prefecture",
         "Sous-prefecture": "Sub-prefecture",
+        "admin3name": "Commune",
         "Year": "Year",
         "Index_GDP": "Economic Activity (GDP)",
         "Index_GDP_prim": "Primary Sector GDP",
