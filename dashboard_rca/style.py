@@ -45,5 +45,12 @@ def inject_custom_css():
         padding-left: 2rem !important;
         padding-right: 2rem !important;
     }
+
+    /* ── CARTE PLOTLY : pleine largeur ──────────────────────────────────── */
+    [data-testid="stPlotlyChart"] > div,
+    [data-testid="stPlotlyChart"] iframe {
+        width: 100% !important;
+        min-width: 100% !important;
+    }
     </style>
     """, unsafe_allow_html=True)

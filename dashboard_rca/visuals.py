@@ -124,6 +124,7 @@ def build_map(
     hover_columns: list[str] | None = None,
     resolution: str = "",
     lang: str = "FR",
+    height: int = 700,
 ) -> Figure:
     """Create a Jenks-classified choropleth map for the currently selected territory.
 
@@ -145,6 +146,8 @@ def build_map(
         resolution: Current spatial resolution string from config.SPATIAL_RESOLUTIONS.
             Used to decide between simple and detailed hover tooltips.
         lang: UI language code (``FR`` or ``EN``) for hover labels and formatted values.
+        height: Figure height in pixels. Defaults to 700. Pass a larger value on
+            wide-screen deployments to fill the available vertical space.
 
     Returns:
         Plotly Figure (choropleth_map) ready for st.plotly_chart()
@@ -297,7 +300,7 @@ def build_map(
         labels=labels_dict,
         opacity=0.78,  # Slightly higher opacity reduces visible seams between cells
         map_style="carto-positron",  # Labeled basemap provides context
-        height=700,
+        height=height,
     )
 
     fig.update_layout(

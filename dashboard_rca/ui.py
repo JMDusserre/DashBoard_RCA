@@ -29,7 +29,7 @@ from .visuals import build_map, build_radar_chart
 
 ZONE_KEY_SEP = " · "
 
-st.set_page_config(layout="wide", page_title="RR_WLD 2025-520 Dashboard")
+st.set_page_config(layout="wide", page_title="RR_WLD 2025-520 Dashboard", initial_sidebar_state="expanded")
 inject_custom_css()
 
 
@@ -75,6 +75,7 @@ def _cached_build_map(
     territory: str,
     year: int,
     lang: str,
+    height: int = 700,
 ):
     """Cache Plotly choropleth keyed on scalar filter arguments including language."""
     return build_map(
@@ -83,6 +84,7 @@ def _cached_build_map(
         hover_columns=[metric],
         resolution=resolution,
         lang=lang,
+        height=height,
     )
 
 
@@ -421,6 +423,7 @@ def main() -> None:
 
     st.markdown(f"### {txt('geospatial_map')}")
     st.caption(_map_caption(resolution_option))
+    map_height = 800 if territory_choice == "All territories" else 650
     with st.spinner(txt("map_generating")):
         choropleth_figure = _cached_build_map(
             aggregated_gdf,
@@ -429,6 +432,7 @@ def main() -> None:
             territory_choice,
             selected_year,
             lang,
+            height=map_height,
         )
     st.plotly_chart(choropleth_figure, width="stretch")
 
