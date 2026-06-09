@@ -41,7 +41,9 @@ def inject_custom_css():
     /* ── CONTENU PRINCIPAL ───────────────────────────────────────────────── */
     .block-container {
         padding-top: 1rem !important;
-        max-width: 95% !important;
+        max-width: 100% !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
     }
     </style>
     """, unsafe_allow_html=True)

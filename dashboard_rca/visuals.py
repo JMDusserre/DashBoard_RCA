@@ -30,9 +30,9 @@ DESIGN DECISIONS:
      sequential (light = low, dark = high).
 
   6. Dynamic viewport:
-     _compute_viewport() derives center and zoom from the GDF bounding box so
-     both full-CAR and single-territory views are handled automatically without
-     any caller-side computation.
+     build_map() computes center and zoom from the GDF bounding box (log₂ formula)
+     so both full-CAR and single-territory views are framed correctly regardless
+     of the map container size.
 
 World Bank PRWP 11309 Alignment:
   - Choropleth encodes a single index for analytical focus.
@@ -116,32 +116,6 @@ def _gauge(score: float | None, *, is_risk: bool = False, blocks: int = 5) -> st
     bar = "".join([color] * filled + ["⬜"] * (blocks - filled))
     return f"{bar}  {clamped:.0f}"
 
-
-def _compute_viewport(gdf: gpd.GeoDataFrame) -> dict:
-    """Derive map center and zoom from the bounding box of the GDF geometries.
-
-    Reprojects to EPSG:4326 (safe no-op if already geographic) to guarantee
-    lat/lon output regardless of the source CRS. Uses a log₂ formula so that
-    each halving of the geographic extent increases zoom by 1 level, matching
-    the Plotly/Maplibre tile scheme. A 10 % margin keeps polygons away from
-    the very edge of the viewport.
-
-    Falls back to the CAR default centre (6.6 N, 20.9 E, zoom 4.8) if the
-    geometry is empty or reprojection fails.
-    """
-    try:
-        geo = gdf.geometry.dropna()
-        if geo.empty:
-            raise ValueError("empty geometry")
-        bounds = geo.to_crs("EPSG:4326").total_bounds  # [minlon, minlat, maxlon, maxlat]
-        minlon, minlat, maxlon, maxlat = bounds
-        center = {"lat": (minlat + maxlat) / 2.0, "lon": (minlon + maxlon) / 2.0}
-        max_range = max(maxlon - minlon, maxlat - minlat)
-        zoom = math.log2(360.0 / (max_range * 1.1)) if max_range > 0 else 10.0
-        zoom = max(1.0, min(15.0, zoom))
-        return {"center": center, "zoom": round(zoom, 2)}
-    except Exception:
-        return {"center": {"lat": 6.6, "lon": 20.9}, "zoom": 4.8}
 
 
 def build_map(
@@ -415,11 +389,23 @@ def build_map(
             trace.hoverlabel = dict(namelength=0)
     # ------------------------------------------------------------------------------
 
-    # Fit viewport to the visible polygons: center and zoom derived from the
-    # bounding box of plot_gdf, so both full-CAR and territory views are handled
-    # automatically without any caller-side computation.
-    viewport = _compute_viewport(plot_gdf)
-    fig.update_layout(map=dict(center=viewport["center"], zoom=viewport["zoom"]))
+    # Fit the camera to the visible polygons using center + zoom derived from
+    # the bounding box. map.bounds is a navigation constraint, not a fit
+    # command — center/zoom is the only reliable way to set the initial view.
+    try:
+        geo = plot_gdf.geometry.dropna()
+        if geo.empty:
+            raise ValueError("empty geometry")
+        bounds = geo.to_crs("EPSG:4326").total_bounds  # [minlon, minlat, maxlon, maxlat]
+        minlon, minlat, maxlon, maxlat = bounds
+        center = {"lat": (minlat + maxlat) / 2.0, "lon": (minlon + maxlon) / 2.0}
+        max_range = max(maxlon - minlon, maxlat - minlat)
+        zoom = math.log2(360.0 / (max_range * 1.1)) if max_range > 0 else 10.0
+        zoom = max(1.0, min(15.0, zoom))
+    except Exception:
+        center = {"lat": 6.6, "lon": 20.9}
+        zoom = 4.8
+    fig.update_layout(map=dict(center=center, zoom=round(zoom, 2)))
 
     return fig
 
