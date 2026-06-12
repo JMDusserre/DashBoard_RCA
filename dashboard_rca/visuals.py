@@ -204,8 +204,16 @@ def build_map(
     # for both the fit and the assignment guarantees that yb[i] is written
     # to exactly the i-th row that satisfies valid_mask — no intermediate
     # Series or index reconstruction needed.
+    # NaN label is context-sensitive: GDP metrics can have genuine missing data
+    # (mining/agriculture in uninhabited areas), while all other satellite-derived
+    # indices simply reflect uninhabited land (forests, savannas, etc.).
+    if "GDP" in color_column:
+        nan_label = "Données manquantes" if lang == "FR" else "Missing data"
+    else:
+        nan_label = "Zone inhabitée" if lang == "FR" else "Uninhabited area"
+
     valid_mask = raw_values.notna()
-    plot_gdf[plot_column] = "No Data"
+    plot_gdf[plot_column] = nan_label
 
     if valid_mask.any():
         class_count = min(5, raw_values.loc[valid_mask].nunique())
@@ -254,7 +262,7 @@ def build_map(
     else:
         jenks_color_map = {}
 
-    jenks_color_map["No Data"] = NO_DATA_COLOR
+    jenks_color_map[nan_label] = NO_DATA_COLOR
 
     hover_name_col = _hover_zone_column(resolution, set(plot_gdf.columns))
 
@@ -294,7 +302,7 @@ def build_map(
         featureidkey="id",
         color=plot_column,
         color_discrete_map=jenks_color_map,
-        category_orders={plot_column: class_labels + ["No Data"]},
+        category_orders={plot_column: class_labels + [nan_label]},
         hover_name=hover_name_col,
         hover_data=hover_data_dict,
         labels=labels_dict,
@@ -330,7 +338,7 @@ def build_map(
                 font=dict(size=14),
             ),
             dict(
-                text=f"Gray = no data or uninhabited ({NO_DATA_COLOR})",
+                text=f"Gray = {nan_label} ({NO_DATA_COLOR})",
                 x=0.5,
                 y=-0.2,
                 xref="paper",
