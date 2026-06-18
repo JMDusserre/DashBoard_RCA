@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-06-18
+### Added
+- **Changelog Expander:** Sidebar now displays latest release notes with a bilingual summary.
+- **Feedback Button:** Added a pre-filled mailto link in the sidebar to report issues or suggest improvements (FR/EN).
+
 ## [1.1.0] - 2026-06-18
 ### Added
 - **Spatial Comparison:** Added the ability to select a secondary zone to overlay two profiles on the radar chart.

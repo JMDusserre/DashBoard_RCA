@@ -173,6 +173,10 @@ UI_TEXTS = {
         "zone_comparison": "Zone comparée",
         "updates_section": "📣 Mises à jour",
         "updates_expander": "Voir les nouveautés (v1.1)",
+        "feedback_section": "💬 Feedback & Bugs",
+        "feedback_button": "Signaler un problème",
+        "feedback_subject": "Feedback/Bug Dashboard RCA",
+        "feedback_body": "Bonjour,\n\nJe souhaite signaler un problème ou suggérer une amélioration concernant le dashboard RCA :\n\n- [Description du problème ou de l'idée] :\n- [URL de la page concernée] :",
 
         # Menu options (FR display labels)
         "Strategic (Donors/PTF)": "Stratégique (Bailleurs / Partenaires)",
@@ -252,6 +256,10 @@ UI_TEXTS = {
         "zone_comparison": "Comparison zone",
         "updates_section": "📣 Updates",
         "updates_expander": "See what's new (v1.1)",
+        "feedback_section": "💬 Feedback & Bugs",
+        "feedback_button": "Report an issue",
+        "feedback_subject": "Feedback/Bug RCA Dashboard",
+        "feedback_body": "Hello,\n\nI would like to report an issue or suggest an improvement for the CAR dashboard:\n\n- [Description of the issue or suggestion]:\n- [URL of the page]:",
 
         # Menu options
         "Strategic (Donors/PTF)": "Strategic (Donors/PTF)",
