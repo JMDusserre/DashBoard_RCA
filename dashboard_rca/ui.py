@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from .config import (
+    APP_ROOT,
     INDICATOR_HIERARCHY,
     PERSONA_KPI_DEFINITIONS,
     PERSONA_OPTIONS,
@@ -274,6 +275,15 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
             index=default_index,
             format_func=format_hierarchy,
         )
+
+        _sidebar_hr()
+        _sidebar_section(txt("updates_section"))
+        with st.sidebar.expander(txt("updates_expander")):
+            _changelog_path = APP_ROOT / "CHANGELOG.md"
+            if _changelog_path.exists():
+                st.markdown(_changelog_path.read_text(encoding="utf-8"))
+            else:
+                st.caption("CHANGELOG.md not found.")
 
     return persona, territory_choice, resolution_option, selected_map_metric
 

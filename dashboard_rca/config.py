@@ -171,6 +171,8 @@ UI_TEXTS = {
         "compare_zone": "Comparer avec (optionnel)",
         "zone_selected": "Zone sélectionnée",
         "zone_comparison": "Zone comparée",
+        "updates_section": "📣 Mises à jour",
+        "updates_expander": "Voir les nouveautés (v1.1)",
 
         # Menu options (FR display labels)
         "Strategic (Donors/PTF)": "Stratégique (Bailleurs / Partenaires)",
@@ -248,6 +250,8 @@ UI_TEXTS = {
         "compare_zone": "Compare with (optional)",
         "zone_selected": "Selected zone",
         "zone_comparison": "Comparison zone",
+        "updates_section": "📣 Updates",
+        "updates_expander": "See what's new (v1.1)",
 
         # Menu options
         "Strategic (Donors/PTF)": "Strategic (Donors/PTF)",
