@@ -279,14 +279,11 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
         _sidebar_hr()
         _sidebar_section(txt("updates_section"))
         with st.sidebar.expander(txt("updates_expander")):
-            st.markdown(
-                "**Aujourd'hui / Today :**\n"
-                "- 🔍 Comparaison spatiale / Spatial comparison\n"
-                "- 🎯 Profils dynamiques / Dynamic Personas\n"
-                "- 📂 Menu hiérarchique / Hierarchical menu\n"
-                "\n"
-                "*[Read full changelog on GitHub]*"
-            )
+            _changelog_path = APP_ROOT / "CHANGELOG.md"
+            if _changelog_path.exists():
+                st.markdown(_changelog_path.read_text(encoding="utf-8"))
+            else:
+                st.caption("CHANGELOG.md not found.")
 
         _sidebar_hr()
         _sidebar_section(txt("feedback_section"))
