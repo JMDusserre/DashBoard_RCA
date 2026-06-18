@@ -6,8 +6,10 @@ import pandas as pd
 import streamlit as st
 
 from .config import (
+    INDICATOR_HIERARCHY,
     PERSONA_KPI_DEFINITIONS,
     PERSONA_OPTIONS,
+    PERSONA_RADAR_COLUMNS,
     SPATIAL_RESOLUTIONS,
     HUMAN_CENTRIC_METRICS,
     CSV_PATH,
@@ -235,10 +237,42 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
         _sidebar_hr()
 
         _sidebar_section(txt("data_vis"))
-        selected_map_metric = select_metric(
+
+        # Build a hierarchy-ordered list from INDICATOR_HIERARCHY; orphan columns
+        # (not referenced in the dict) are appended at the bottom.
+        ordered_options: list[str] = []
+        is_child_map: dict[str, bool] = {}
+
+        for parent, children in INDICATOR_HIERARCHY.items():
+            if parent in index_columns:
+                ordered_options.append(parent)
+                is_child_map[parent] = False
+            for child in children:
+                if child in index_columns:
+                    ordered_options.append(child)
+                    is_child_map[child] = True
+
+        for col in index_columns:
+            if col not in ordered_options:
+                ordered_options.append(col)
+                is_child_map[col] = False
+
+        # \u2003 (em space) preserves visual indentation in browser <select> elements
+        # where regular spaces are collapsed by HTML rendering.
+        def format_hierarchy(col: str) -> str:
+            label = txt(col)
+            return f"\u2003↳ {label}" if is_child_map.get(col, False) else label
+
+        default_index = (
+            ordered_options.index(DEFAULT_MAP_COLUMN)
+            if DEFAULT_MAP_COLUMN in ordered_options
+            else 0
+        )
+        selected_map_metric = st.sidebar.selectbox(
             txt("highlight_index"),
-            options=index_columns,
-            default_value=DEFAULT_MAP_COLUMN,
+            options=ordered_options,
+            index=default_index,
+            format_func=format_hierarchy,
         )
 
     return persona, territory_choice, resolution_option, selected_map_metric
@@ -299,27 +333,8 @@ def _render_kpi_cards(metric_values: list[tuple[str, float | None, str | None]])
             st.metric(txt(metric_name), metric_text)
 
 
-def _render_detail_panel(aggregated_gdf, resolution: str) -> None:
-    st.markdown(f"### {txt('profile_title')}")
-    st.caption(_profile_caption(resolution))
-
-    zone_col = _detail_zone_column(resolution)
-    zone_options = _detail_zone_options(aggregated_gdf, resolution)
-    select_label = txt("select_cell") if zone_col == "id" else txt("select_zone")
-
-    detail_zone = st.selectbox(select_label, options=[""] + zone_options, index=0)
-
-    if not detail_zone:
-        return
-
-    detail = _filter_detail_rows(aggregated_gdf, resolution, detail_zone)
-    if detail.empty:
-        st.warning(txt("profile_unavailable").format(zone=detail_zone))
-        return
-
-    row = detail.iloc[0]
-    st.markdown(f"#### {txt('location_context')}")
-    unknown = txt("unknown_location")
+def _zone_location_caption(row: pd.Series, unknown: str) -> str:
+    """Build a compact location string for one zone row."""
     prefecture_str = (
         str(row.get("Prefecture", unknown))
         if is_valid_admin_label(row.get("Prefecture"))
@@ -337,15 +352,73 @@ def _render_detail_panel(aggregated_gdf, resolution: str) -> None:
     )
     year_val = int(row.get("Year", 0)) if pd.notna(row.get("Year")) else 0
     id_str = str(row.get("id", "—"))
-    st.caption(
-        f"**{txt('Prefecture')}:** {prefecture_str} | **{txt('Sous-prefecture')}:** {sous_pref_str} "
-        f"| **{txt('admin3name')}:** {commune_str} "
-        f"| **{txt('Year')}:** {year_val} | **ID:** {id_str}"
+    return (
+        f"**{txt('Prefecture')}:** {prefecture_str} | "
+        f"**{txt('Sous-prefecture')}:** {sous_pref_str} | "
+        f"**{txt('admin3name')}:** {commune_str} | "
+        f"**{txt('Year')}:** {year_val} | **ID:** {id_str}"
     )
+
+
+def _render_detail_panel(aggregated_gdf, resolution: str, persona: str = "Strategic (Donors/PTF)") -> None:
+    st.markdown(f"### {txt('profile_title')}")
+    st.caption(_profile_caption(resolution))
+
+    zone_col = _detail_zone_column(resolution)
+    zone_options = _detail_zone_options(aggregated_gdf, resolution)
+    select_label = txt("select_cell") if zone_col == "id" else txt("select_zone")
+
+    col_main, col_compare = st.columns(2)
+    with col_main:
+        detail_zone = st.selectbox(
+            select_label,
+            options=[""] + zone_options,
+            index=0,
+            key="zone_main",
+        )
+    with col_compare:
+        compare_zone = st.selectbox(
+            txt("compare_zone"),
+            options=[""] + zone_options,
+            index=0,
+            key="zone_compare",
+        )
+
+    if not detail_zone:
+        return
+
+    detail = _filter_detail_rows(aggregated_gdf, resolution, detail_zone)
+    if detail.empty:
+        st.warning(txt("profile_unavailable").format(zone=detail_zone))
+        return
+
+    row = detail.iloc[0]
+    lang = _current_lang()
+    unknown = txt("unknown_location")
+
+    # Resolve optional comparison zone (must differ from main zone)
+    row_compare: pd.Series | None = None
+    if compare_zone and compare_zone != detail_zone:
+        detail_cmp = _filter_detail_rows(aggregated_gdf, resolution, compare_zone)
+        if not detail_cmp.empty:
+            row_compare = detail_cmp.iloc[0]
+
+    # Location context block — show both zones when comparing
+    st.markdown(f"#### {txt('location_context')}")
+    st.caption(f"**{txt('zone_selected')}** — {_zone_location_caption(row, unknown)}")
+    if row_compare is not None:
+        st.caption(f"**{txt('zone_comparison')}** — {_zone_location_caption(row_compare, unknown)}")
 
     st.markdown(f"#### {txt('radar_title')}")
     st.caption(txt("radar_caption"))
-    radar_fig = build_radar_chart(row, lang=_current_lang())
+    radar_fig = build_radar_chart(
+        row,
+        lang=lang,
+        persona=persona,
+        row_compare=row_compare,
+        name_main=detail_zone,
+        name_compare=compare_zone if row_compare is not None else "",
+    )
     st.plotly_chart(radar_fig, width="stretch")
 
 
@@ -436,7 +509,7 @@ def main() -> None:
         )
     st.plotly_chart(choropleth_figure, width="stretch")
 
-    _render_detail_panel(aggregated_gdf, resolution_option)
+    _render_detail_panel(aggregated_gdf, resolution_option, persona=persona)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ from __future__ import annotations
 import math
 
 import plotly.express as px
+import plotly.graph_objects as go
 from plotly.graph_objs import Figure
 import mapclassify as mc
 
@@ -53,8 +54,8 @@ import pandas as pd
 
 from .config import (
     CAPACITY_METRICS,
-    DETAIL_COLUMNS,
     NO_DATA_COLOR,
+    PERSONA_RADAR_COLUMNS,
     RISK_METRICS,
 )
 from .formatting import MISSING_VALUE_LABEL, format_metric_value, label_for_column, safe_float
@@ -421,59 +422,97 @@ def build_map(
     return fig
 
 
+def _extract_radar_values(
+    row: pd.Series,
+    columns: list[str],
+    lang: str,
+) -> list[float]:
+    """Extract and normalise radar values for one zone row.
+
+    Risk metrics are inverted (100 - value) so the radial axis always reads
+    as a safety scale. NaN → -10 (off-scale sentinel visible below 0).
+    The first value is repeated at the end to close the polygon.
+    """
+    values: list[float] = []
+    for column in columns:
+        numeric_value = safe_float(row.get(column, pd.NA))
+        if column in RISK_METRICS and numeric_value is not None:
+            numeric_value = 100.0 - numeric_value
+        values.append(numeric_value if numeric_value is not None else -10.0)
+    # Close the polygon for go.Scatterpolar
+    return values + [values[0]]
+
+
 def build_radar_chart(
     row: pd.Series,
     lang: str = "FR",
+    persona: str = "Strategic (Donors/PTF)",
+    row_compare: pd.Series | None = None,
+    name_main: str = "",
+    name_compare: str = "",
 ) -> Figure:
     """Create a radar chart showing the 5-dimensional vulnerability profile.
 
-    Axes follow ``config.DETAIL_COLUMNS``: overall vulnerability, infrastructure,
-    exposure risk, health access, and water access. Each dimension is scaled to
-    [0, 100] where 100 = high safety/access and 0 = high risk/no access.
-    Risk metrics are inverted so the axis always reads as a safety scale.
-    
+    Axes are driven by ``config.PERSONA_RADAR_COLUMNS[persona]``, so each user
+    profile sees the 5 dimensions most relevant to their decision-making.
+    Risk metrics are inverted so the radial axis always reads as a safety scale.
+
     DESIGN - NaN Handling:
       Missing values (from field insecurity) are set to -10 (below 0) and
       labeled "N/A" in hover text. This prevents fabrication while keeping
       the chart readable. Viewers can instantly see which dimensions lack data.
-    
+
+    DESIGN - Comparison mode:
+      When ``row_compare`` is provided a second Scatterpolar trace is added in
+      orange. The legend is shown horizontally at the bottom only in that case.
+
     Args:
-        row: Single-row Series from GeoDataFrame (one grid cell)
-    
+        row: Primary zone row (pd.Series from GeoDataFrame).
+        lang: UI language code (``"FR"`` or ``"EN"``).
+        persona: Active persona key from ``config.PERSONA_OPTIONS``.
+        row_compare: Optional secondary zone row for overlay comparison.
+        name_main: Legend label for the primary zone.
+        name_compare: Legend label for the comparison zone.
+
     Returns:
         Plotly Figure (scatterpolar) ready for st.plotly_chart()
     """
-    # Extract values for the 5 dimensions, using -10 for NaN (off-scale as "N/A")
-    values = []
-    labels = []
-    for column in DETAIL_COLUMNS:
-        label = label_for_column(column, lang=lang)
-        labels.append(label)
-        numeric_value = safe_float(row.get(column, pd.NA))
-
-        # Invert risk metrics so high risk appears as low on the 0-100 safety axis.
-        if column in RISK_METRICS and numeric_value is not None:
-            numeric_value = 100.0 - numeric_value
-
-        values.append(numeric_value if numeric_value is not None else -10.0)
-
-    # Build radar trace with custom styling
-    fig = px.line_polar(
-        r=values,
-        theta=labels,
-        line_close=True,
-        title="Multidimensional Vulnerability Profile (0=High Risk, 100=High Safety)",
+    # Fall back to first persona if key is missing (defensive)
+    columns = PERSONA_RADAR_COLUMNS.get(
+        persona, next(iter(PERSONA_RADAR_COLUMNS.values()))
     )
+    labels = [label_for_column(col, lang=lang) for col in columns]
+    # Closed labels list (repeat first to match closed values)
+    theta = labels + [labels[0]]
 
-    # Update to filled radar (more readable than lines)
-    fig.update_traces(
+    values_main = _extract_radar_values(row, columns, lang)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatterpolar(
+        r=values_main,
+        theta=theta,
         fill="toself",
-        fillcolor="rgba(100, 150, 255, 0.4)",  # Semi-transparent blue fill
-        line_color="rgb(100, 150, 255)",
-        marker_size=8,
-    )
+        fillcolor="rgba(100, 150, 255, 0.35)",
+        line=dict(color="rgb(100, 150, 255)", width=2),
+        marker=dict(size=7),
+        name=name_main or (labels[0] if not row_compare else ""),
+        showlegend=row_compare is not None,
+    ))
 
-    # Set radial axis to [0, 100] plus some padding for -10 markers
+    if row_compare is not None:
+        values_compare = _extract_radar_values(row_compare, columns, lang)
+        fig.add_trace(go.Scatterpolar(
+            r=values_compare,
+            theta=theta,
+            fill="toself",
+            fillcolor="rgba(255, 140, 60, 0.30)",
+            line=dict(color="rgb(220, 90, 20)", width=2),
+            marker=dict(size=7),
+            name=name_compare,
+            showlegend=True,
+        ))
+
     fig.update_layout(
         polar=dict(
             radialaxis=dict(
@@ -486,8 +525,16 @@ def build_radar_chart(
                 tickfont=dict(size=11),
             ),
         ),
+        showlegend=row_compare is not None,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.25,
+            xanchor="center",
+            x=0.5,
+        ) if row_compare is not None else {},
         height=450,
-        margin=dict(l=80, r=80, t=80, b=80),
+        margin=dict(l=80, r=80, t=60, b=80 if row_compare is None else 110),
         font=dict(size=11),
     )
 

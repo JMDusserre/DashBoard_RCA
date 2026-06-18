@@ -30,13 +30,22 @@ CAR_BOUNDS = {
 }
 
 # 5 dimensions shown in the radar chart (one per axis).
-DETAIL_COLUMNS = [
-    "Index_Vulnerab_Final",
-    "Index_Infrastructure",
-    "Index_ExpoRisk",
-    "Index_health",
-    "Index_water_access",
-]
+PERSONA_RADAR_COLUMNS: dict[str, list[str]] = {
+    "Strategic (Donors/PTF)": [
+        "Index_Vulnerab_Final",
+        "Index_ExpoRisk",
+        "Index_Infrastructure",
+        "Index_GDP_prim",
+        "Index_GDP_sec_ter",
+    ],
+    "Operational (NGOs/UN)": [
+        "Index_water_access",
+        "Index_health",
+        "Index_educ_prim",
+        "Index_conflicts",
+        "Index_floods",
+    ],
+}
 
 # Capacity/access metrics — mapped to the "Greens" palette in visuals.py.
 CAPACITY_METRICS = [
@@ -69,6 +78,26 @@ HUMAN_CENTRIC_METRICS = [
     "Index_conflicts",
     "Index_Vulnerab_Final",
 ]
+
+# Logical grouping for the UI indicator dropdown (parent → children).
+# Parents with an empty list are standalone top-level indicators.
+# Any index column absent from this dict is appended as an orphan at the bottom.
+INDICATOR_HIERARCHY: dict[str, list[str]] = {
+    "Index_Vulnerab_Final": [],
+    "Index_ExpoRisk": [
+        "Index_conflicts",
+        "Index_floods",
+    ],
+    "Index_Infrastructure": [
+        "Index_water_access",
+        "Index_health",
+        "Index_educ_prim",
+    ],
+    "Index_GDP": [
+        "Index_GDP_prim",
+        "Index_GDP_sec_ter",
+    ],
+}
 
 PERSONA_OPTIONS = [
     "Strategic (Donors/PTF)",
@@ -139,6 +168,9 @@ UI_TEXTS = {
         "location_context": "Contexte & Localisation",
         "radar_title": "Graphique radar de vulnérabilité à 5 dimensions",
         "radar_caption": "Chaque dimension va de 0 (risque élevé) à 100 (sécurité élevée). Les données manquantes apparaissent en dessous de l'échelle.",
+        "compare_zone": "Comparer avec (optionnel)",
+        "zone_selected": "Zone sélectionnée",
+        "zone_comparison": "Zone comparée",
 
         # Menu options (FR display labels)
         "Strategic (Donors/PTF)": "Stratégique (Bailleurs / Partenaires)",
@@ -213,6 +245,9 @@ UI_TEXTS = {
         "location_context": "Location & Context",
         "radar_title": "5-Dimensional Proxy Radar Chart",
         "radar_caption": "Each dimension extends from 0 (high risk) to 100 (high safety). Missing data is shown below the scale.",
+        "compare_zone": "Compare with (optional)",
+        "zone_selected": "Selected zone",
+        "zone_comparison": "Comparison zone",
 
         # Menu options
         "Strategic (Donors/PTF)": "Strategic (Donors/PTF)",
