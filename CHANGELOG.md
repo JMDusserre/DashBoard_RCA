@@ -5,8 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [1.1.2] - 2026-06-25
 ### Changed
 - **Metric classification:** `Index_floods` and `Index_conflicts` moved from risk to capacity metrics (100 = safety, not exposure).
+- **UI labels:** Flood and conflict indices renamed to reflect absence-of-risk semantics (FR/EN).
 - **Map hover tooltip:** Admin-level pillar gauges now show Risk Exposure (`Index_ExpoRisk`) instead of Water Access.
-- **Radar chart hover:** Tooltip displays original scores (aligned with the map) while the polygon geometry still inverts risk metrics for readability.
+- **Radar chart hover:** Tooltip displays map-aligned scores (`sur 100` / `of 100`); missing values show `—` instead of `-10.0`. Risk metrics add a second line explaining inward vs outward spokes.
+- **Radar chart semantics:** Risk axes renamed on the chart (e.g. Overall Resilience, Safety / Risk Protection) to match inverted geometry; caption rewritten to explain outward = favorable and lower raw scores = more outward spokes on risk axes.
 
 ## [1.1.1] - 2026-06-18
 ### Added

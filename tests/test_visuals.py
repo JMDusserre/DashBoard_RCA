@@ -78,11 +78,17 @@ def test_build_radar_chart_inverts_risk_metrics() -> None:
             "Index_Vulnerab_Final": 80.0,
             "Index_Infrastructure": 50.0,
             "Index_ExpoRisk": 20.0,
-            "Index_health": 60.0,
-            "Index_water_access": 40.0,
+            "Index_GDP_prim": 60.0,
+            "Index_GDP_sec_ter": 40.0,
         }
     )
     fig = build_radar_chart(row, lang="EN")
     r_vals = fig.data[0].r
-    assert r_vals[0] == pytest.approx(20.0)
-    assert r_vals[1] == pytest.approx(50.0)
+    hover = fig.data[0].hovertext
+    assert r_vals[0] == pytest.approx(20.0)   # Index_Vulnerab_Final: 100 - 80
+    assert r_vals[1] == pytest.approx(80.0)   # Index_ExpoRisk: 100 - 20
+    assert r_vals[2] == pytest.approx(50.0)   # Index_Infrastructure: not inverted
+    assert "20.0 of 100" in hover[1]
+    assert "outward spoke" in hover[1]
+    assert "80.0 of 100" in hover[0]
+    assert "inward spoke" in hover[0]

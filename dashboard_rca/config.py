@@ -167,7 +167,14 @@ UI_TEXTS = {
         "map_generating": "Génération de la carte…",
         "location_context": "Contexte & Localisation",
         "radar_title": "Graphique radar de vulnérabilité à 5 dimensions",
-        "radar_caption": "Chaque dimension va de 0 (risque élevé) à 100 (sécurité élevée). Les données manquantes apparaissent en dessous de l'échelle.",
+        "radar_caption": (
+            "Plus une branche s'étend vers l'extérieur, plus la situation est favorable sur cette dimension. "
+            "Le survol affiche le score identique à la carte (sur 100). "
+            "Pour l'exposition aux risques et la vulnérabilité globale, un score bas au survol correspond à une branche plus extérieure."
+        ),
+        "radar_hover_risk_high": "Lecture radar : branche intérieure (niveau élevé)",
+        "radar_hover_risk_mid": "Lecture radar : niveau modéré",
+        "radar_hover_risk_low": "Lecture radar : branche extérieure (niveau faible)",
         "compare_zone": "Comparer avec (optionnel)",
         "zone_selected": "Zone sélectionnée",
         "zone_comparison": "Zone comparée",
@@ -250,7 +257,14 @@ UI_TEXTS = {
         "map_generating": "Generating map…",
         "location_context": "Location & Context",
         "radar_title": "5-Dimensional Proxy Radar Chart",
-        "radar_caption": "Each dimension extends from 0 (high risk) to 100 (high safety). Missing data is shown below the scale.",
+        "radar_caption": (
+            "The farther a spoke extends outward, the more favorable the situation on that dimension. "
+            "Hover shows the same score as the map (out of 100). "
+            "For risk exposure and overall vulnerability, a lower hover score means a more outward spoke."
+        ),
+        "radar_hover_risk_high": "Radar reading: inward spoke (high level)",
+        "radar_hover_risk_mid": "Radar reading: moderate level",
+        "radar_hover_risk_low": "Radar reading: outward spoke (low level)",
         "compare_zone": "Compare with (optional)",
         "zone_selected": "Selected zone",
         "zone_comparison": "Comparison zone",

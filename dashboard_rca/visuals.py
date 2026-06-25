@@ -57,6 +57,7 @@ from .config import (
     NO_DATA_COLOR,
     PERSONA_RADAR_COLUMNS,
     RISK_METRICS,
+    UI_TEXTS,
 )
 from .formatting import MISSING_VALUE_LABEL, format_metric_value, label_for_column, safe_float
 
@@ -422,6 +423,25 @@ def build_map(
     return fig
 
 
+def _radar_hover_text(column: str, numeric_value: float, lang: str) -> str:
+    """Build hover label: score aligned with map; risk axes add a 2-line radar reading."""
+    label = label_for_column(column, lang=lang)
+    score = format_metric_value(column, numeric_value, lang=lang)
+    line1 = f"{label} : {score}"
+    if column not in RISK_METRICS:
+        return line1
+
+    texts = UI_TEXTS.get(lang, UI_TEXTS["FR"])
+    clamped = max(0.0, min(100.0, numeric_value))
+    if clamped >= 70:
+        line2 = texts["radar_hover_risk_high"]
+    elif clamped < 40:
+        line2 = texts["radar_hover_risk_low"]
+    else:
+        line2 = texts["radar_hover_risk_mid"]
+    return f"{line1}<br>{line2}"
+
+
 def _extract_radar_values(
     row: pd.Series,
     columns: list[str],
@@ -430,7 +450,8 @@ def _extract_radar_values(
     """Extract radar plot and hover values for one zone row.
 
     Returns ``plot_values`` (inverted for RISK_METRICS so the polygon reads as
-    safety) and ``raw_values`` (formatted strings for hover, matching the map).
+    safety) and ``raw_values`` (hover strings: map score; risk axes include a
+    second line explaining outward vs inward spokes).
     Missing data → plot at -10 (off-scale sentinel); hover shows MISSING_VALUE_LABEL.
     Each list is closed by repeating the first value for go.Scatterpolar.
     """
@@ -439,12 +460,14 @@ def _extract_radar_values(
     for column in columns:
         numeric_value = safe_float(row.get(column, pd.NA))
         if numeric_value is not None:
-            raw_values.append(f"{numeric_value:.1f}")
+            raw_values.append(_radar_hover_text(column, numeric_value, lang))
             plot_values.append(
                 100.0 - numeric_value if column in RISK_METRICS else numeric_value
             )
         else:
-            raw_values.append(MISSING_VALUE_LABEL)
+            raw_values.append(
+                f"{label_for_column(column, lang=lang)} : {MISSING_VALUE_LABEL}"
+            )
             plot_values.append(-10.0)
     return plot_values + [plot_values[0]], raw_values + [raw_values[0]]
 
@@ -465,8 +488,11 @@ def build_radar_chart(
 
     DESIGN - NaN Handling:
       Missing values (from field insecurity) are set to -10 (below 0) and
-      labeled "N/A" in hover text. This prevents fabrication while keeping
-      the chart readable. Viewers can instantly see which dimensions lack data.
+      labeled with MISSING_VALUE_LABEL in hover text.
+
+    DESIGN - Hover clarity:
+      Hover shows the map score (with locale suffix). Risk metrics add a second
+      line explaining how the spoke direction relates to the raw score.
 
     DESIGN - Comparison mode:
       When ``row_compare`` is provided a second Scatterpolar trace is added in
@@ -487,7 +513,23 @@ def build_radar_chart(
     columns = PERSONA_RADAR_COLUMNS.get(
         persona, next(iter(PERSONA_RADAR_COLUMNS.values()))
     )
-    labels = [label_for_column(col, lang=lang) for col in columns]
+    labels = []
+    for col in columns:
+        base_label = label_for_column(col, lang=lang)
+        if col in RISK_METRICS:
+            # On inverse le sens du mot pour coller à l'inversion géométrique
+            if lang == "FR":
+                if "vulnérabilité" in base_label.lower():
+                    labels.append("Résilience Globale")
+                else:
+                    labels.append("Sécurité (Protection risques)")
+            else:
+                if "vulnerability" in base_label.lower():
+                    labels.append("Overall Resilience")
+                else:
+                    labels.append("Safety (Risk Protection)")
+        else:
+            labels.append(base_label)
     # Closed labels list (repeat first to match closed values)
     theta = labels + [labels[0]]
 
@@ -499,7 +541,7 @@ def build_radar_chart(
         r=values_main,
         theta=theta,
         hovertext=raw_values_main,
-        hovertemplate="%{theta} : %{hovertext}<extra></extra>",
+        hovertemplate="%{hovertext}<extra></extra>",
         fill="toself",
         fillcolor="rgba(100, 150, 255, 0.35)",
         line=dict(color="rgb(100, 150, 255)", width=2),
@@ -514,7 +556,7 @@ def build_radar_chart(
             r=values_compare,
             theta=theta,
             hovertext=raw_values_compare,
-            hovertemplate="%{theta} : %{hovertext}<extra></extra>",
+            hovertemplate="%{hovertext}<extra></extra>",
             fill="toself",
             fillcolor="rgba(255, 140, 60, 0.30)",
             line=dict(color="rgb(220, 90, 20)", width=2),
