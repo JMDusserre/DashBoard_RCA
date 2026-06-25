@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.2] - 2026-06-25
+### Changed
+- **Metric classification:** `Index_floods` and `Index_conflicts` moved from risk to capacity metrics (100 = safety, not exposure).
+- **Map hover tooltip:** Admin-level pillar gauges now show Risk Exposure (`Index_ExpoRisk`) instead of Water Access.
+- **Radar chart hover:** Tooltip displays original scores (aligned with the map) while the polygon geometry still inverts risk metrics for readability.
+
 ## [1.1.1] - 2026-06-18
 ### Added
 - **Changelog Expander:** Sidebar now displays latest release notes with a bilingual summary.

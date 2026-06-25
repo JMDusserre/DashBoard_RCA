@@ -86,7 +86,7 @@ def _hover_zone_column(resolution: str, columns: set[str] | frozenset[str]) -> s
 
 _PILLAR_HOVER: tuple[tuple[str, str, bool], ...] = (
     ("💰 Économie",         "Index_GDP",            False),
-    ("💧 Accès Eau",        "Index_water_access",   False),
+    ("⚠️ Risques",          "Index_ExpoRisk",       True),
     ("🏗️ Infrastructures",  "Index_Infrastructure", False),
 )
 
@@ -368,7 +368,7 @@ def build_map(
                 plot_gdf[f"__pg_{col_key}__"] = f"⬜⬜⬜⬜⬜  {MISSING_VALUE_LABEL}"
 
         gauge_cols = [f"__pg_{col_key}__" for _, col_key, _ in _PILLAR_HOVER]
-        # customdata layout: [0]=main metric, [1]=economy, [2]=water, [3]=infra
+        # customdata layout: [0]=main metric, [1]=economy, [2]=risk, [3]=infra
         cd_cols = ["__hover_metric__"] + gauge_cols
         cd_array = plot_gdf[cd_cols].values.tolist()
 
@@ -426,21 +426,27 @@ def _extract_radar_values(
     row: pd.Series,
     columns: list[str],
     lang: str,
-) -> list[float]:
-    """Extract and normalise radar values for one zone row.
+) -> tuple[list[float], list[str]]:
+    """Extract radar plot and hover values for one zone row.
 
-    Risk metrics are inverted (100 - value) so the radial axis always reads
-    as a safety scale. NaN → -10 (off-scale sentinel visible below 0).
-    The first value is repeated at the end to close the polygon.
+    Returns ``plot_values`` (inverted for RISK_METRICS so the polygon reads as
+    safety) and ``raw_values`` (formatted strings for hover, matching the map).
+    Missing data → plot at -10 (off-scale sentinel); hover shows MISSING_VALUE_LABEL.
+    Each list is closed by repeating the first value for go.Scatterpolar.
     """
-    values: list[float] = []
+    plot_values: list[float] = []
+    raw_values: list[str] = []
     for column in columns:
         numeric_value = safe_float(row.get(column, pd.NA))
-        if column in RISK_METRICS and numeric_value is not None:
-            numeric_value = 100.0 - numeric_value
-        values.append(numeric_value if numeric_value is not None else -10.0)
-    # Close the polygon for go.Scatterpolar
-    return values + [values[0]]
+        if numeric_value is not None:
+            raw_values.append(f"{numeric_value:.1f}")
+            plot_values.append(
+                100.0 - numeric_value if column in RISK_METRICS else numeric_value
+            )
+        else:
+            raw_values.append(MISSING_VALUE_LABEL)
+            plot_values.append(-10.0)
+    return plot_values + [plot_values[0]], raw_values + [raw_values[0]]
 
 
 def build_radar_chart(
@@ -485,13 +491,15 @@ def build_radar_chart(
     # Closed labels list (repeat first to match closed values)
     theta = labels + [labels[0]]
 
-    values_main = _extract_radar_values(row, columns, lang)
+    values_main, raw_values_main = _extract_radar_values(row, columns, lang)
 
     fig = go.Figure()
 
     fig.add_trace(go.Scatterpolar(
         r=values_main,
         theta=theta,
+        hovertext=raw_values_main,
+        hovertemplate="%{theta} : %{hovertext}<extra></extra>",
         fill="toself",
         fillcolor="rgba(100, 150, 255, 0.35)",
         line=dict(color="rgb(100, 150, 255)", width=2),
@@ -501,10 +509,12 @@ def build_radar_chart(
     ))
 
     if row_compare is not None:
-        values_compare = _extract_radar_values(row_compare, columns, lang)
+        values_compare, raw_values_compare = _extract_radar_values(row_compare, columns, lang)
         fig.add_trace(go.Scatterpolar(
             r=values_compare,
             theta=theta,
+            hovertext=raw_values_compare,
+            hovertemplate="%{theta} : %{hovertext}<extra></extra>",
             fill="toself",
             fillcolor="rgba(255, 140, 60, 0.30)",
             line=dict(color="rgb(220, 90, 20)", width=2),

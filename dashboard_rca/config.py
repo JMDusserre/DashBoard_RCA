@@ -56,15 +56,15 @@ CAPACITY_METRICS = [
     "Index_GDP",
     "Index_GDP_prim",
     "Index_GDP_sec_ter",
+    "Index_floods",
+    "Index_conflicts",
 ]
 
 # Risk/negative metrics — mapped to the "Reds" palette in visuals.py
-# and inverted on the radar chart (1 - value = higher risk → lower on axis).
-# As signaled by the data scientist: Idx_floods, Idx_conflicts, Idx_ExpoRisk,
-# Idx_Vulnerab_Final are the "negative" variables requiring a reversed color convention.
+# and inverted on the radar chart (100 - value) so the radial axis reads as safety.
+# Index_floods and Index_conflicts measure absence of risk (100 = safety) and belong
+# in CAPACITY_METRICS; only true exposure/vulnerability indices are listed here.
 RISK_METRICS = [
-    "Index_floods",
-    "Index_conflicts",
     "Index_ExpoRisk",
     "Index_Vulnerab_Final",
 ]
@@ -207,8 +207,8 @@ UI_TEXTS = {
         "Index_health": "Accès aux services de santé",
         "Index_water_access": "Accès à l'eau potable",
         "Index_Vulnerab_Final": "Score global de vulnérabilité",
-        "Index_floods": "Risque d'inondations",
-        "Index_conflicts": "Risque de conflits",
+        "Index_floods": "Sécurité (Absence d'inondations)",
+        "Index_conflicts": "Sécurité (Absence de conflits)",
         "Index_Infrastructure": "Score d'infrastructure",
         "Index_ExpoRisk": "Exposition aux risques",
     },
@@ -290,8 +290,8 @@ UI_TEXTS = {
         "Index_health": "Healthcare Access",
         "Index_water_access": "Water Access",
         "Index_Vulnerab_Final": "Overall Vulnerability Score",
-        "Index_floods": "Flood Risk",
-        "Index_conflicts": "Conflict Risk",
+        "Index_floods": "Safety (Absence of Floods)",
+        "Index_conflicts": "Safety (Absence of Conflicts)",
         "Index_Infrastructure": "Infrastructure Score",
         "Index_ExpoRisk": "Risk Exposure",
     },

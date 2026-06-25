@@ -228,10 +228,17 @@ def _build_sidebar(dashboard_gdf, index_columns: list[str]) -> tuple[str, str, s
             index=0,
             format_func=lambda x: txt("all_territories") if x == "All territories" else x,
         )
+        # Default to prefecture-level view for a macro overview on first load.
+        default_res_index = (
+            SPATIAL_RESOLUTIONS.index("Prefecture (Admin 1)")
+            if "Prefecture (Admin 1)" in SPATIAL_RESOLUTIONS
+            else 0
+        )
+
         resolution_option = st.selectbox(
             txt("spatial_res"),
             options=SPATIAL_RESOLUTIONS,
-            index=0,
+            index=default_res_index,
             format_func=txt,
         )
 
