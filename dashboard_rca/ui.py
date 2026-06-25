@@ -387,8 +387,7 @@ def _zone_location_caption(row: pd.Series, unknown: str) -> str:
 
 
 def _render_detail_panel(aggregated_gdf, resolution: str, persona: str = "Strategic (Donors/PTF)") -> None:
-    st.markdown(f"### {txt('profile_title')}")
-    st.caption(_profile_caption(resolution))
+    st.subheader(txt('profile_title'), help=_profile_caption(resolution))
 
     zone_col = _detail_zone_column(resolution)
     zone_options = _detail_zone_options(aggregated_gdf, resolution)
@@ -435,8 +434,7 @@ def _render_detail_panel(aggregated_gdf, resolution: str, persona: str = "Strate
     if row_compare is not None:
         st.caption(f"**{txt('zone_comparison')}** — {_zone_location_caption(row_compare, unknown)}")
 
-    st.markdown(f"#### {txt('radar_title')}")
-    st.caption(txt("radar_caption"))
+    st.markdown(f"#### {txt('radar_title')}", help=txt("radar_caption"))
     radar_fig = build_radar_chart(
         row,
         lang=lang,
@@ -491,8 +489,7 @@ def main() -> None:
     st.markdown(txt("view").format(txt(persona)))
     st.divider()
 
-    st.subheader(txt("macro_indicators").format(display_name))
-    st.caption(_macro_caption(resolution_option))
+    st.subheader(txt("macro_indicators").format(display_name), help=_macro_caption(resolution_option))
 
     pop_col = "population" if "population" in filtered_gdf.columns else (
         "Index_population" if "Index_population" in filtered_gdf.columns else None
@@ -507,21 +504,18 @@ def main() -> None:
     _render_kpi_cards(metric_values)
 
     st.divider()
-    st.markdown(f"### {txt('overall_vuln')}")
-    st.caption(txt("overall_caption"))
+    st.subheader(txt('overall_vuln'), help=txt("overall_caption"))
 
     if "Index_Vulnerab_Final" in filtered_gdf.columns:
         vuln_score = pd.to_numeric(
             filtered_gdf["Index_Vulnerab_Final"], errors="coerce"
         ).mean(skipna=True)
         vuln_text = format_score_value(vuln_score, lang=lang)
-        st.caption(txt("territory_vuln_caption"))
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            st.metric(txt("territory_score"), vuln_text)
+            st.metric(txt("territory_score"), vuln_text, help=txt("territory_vuln_caption"))
 
-    st.markdown(f"### {txt('geospatial_map')}")
-    st.caption(_map_caption(resolution_option))
+    st.subheader(txt('geospatial_map'), help=_map_caption(resolution_option))
     map_height = 800 if territory_choice == "All territories" else 650
     with st.spinner(txt("map_generating")):
         choropleth_figure = _cached_build_map(
